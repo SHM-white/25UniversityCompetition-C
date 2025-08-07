@@ -60,7 +60,7 @@ $$
 Duv = \text{sign}(v_s - v_t) \cdot \sqrt{(u_s - u_t)^2 + (v_s - v_t)^2}
 $$
 
-## 颜色还原参数
+## 颜色还原参数（实际使用colour-science库）
 
 保真度指数 $Rf$
 
