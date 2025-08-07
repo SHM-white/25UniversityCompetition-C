@@ -32,23 +32,26 @@ v(T) &=\frac{0.317398726+4.22806245\times10^{-5}T+4.20481691\times10^{-8}T^{2}}
 \end{aligned}
 $$
 
-构建单变量方程
+使用最小化距离的方法求 CCT
+
+目标函数：寻找使得点$(u,v)$到黑体轨迹距离最小的温度$T$
 
 $$
-F(T)=\frac{u(T)-u}{v(T)-v}+ \frac{u'(T)}{v'(T)}=0
+\text{minimize} \quad d^2(T) = [u - u(T)]^2 + [v - v(T)]^2
 $$
 
 ```python
-from scipy.optimize import brentq
+from scipy.optimize import minimize_scalar
 
-def F(T):
+def distance_squared(T):
+    """计算点(u,v)到黑体轨迹上温度T对应点的距离平方"""
     uT = u_poly(T)          # Chebyshev u(T)
     vT = v_poly(T)          # Chebyshev v(T)
-    du = du_poly(T)         # u'(T)
-    dv = dv_poly(T)         # v'(T)
-    return (uT - u)/(vT - v) + du/dv
+    return (u - uT)**2 + (v - vT)**2
 
-T_cct = brentq(F, 1000, 20000)   # 返回色温（K）
+# 在合理色温范围内寻找最小距离
+result = minimize_scalar(distance_squared, bounds=(1000, 20000), method='bounded')
+T_cct = result.x            # 返回色温（K）
 ```
 
 距离普朗克轨迹的距离 $Duv$

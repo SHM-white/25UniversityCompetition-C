@@ -14,6 +14,8 @@ from scipy.optimize import brentq
 from scipy.interpolate import interp1d
 import colour
 import warnings
+import matplotlib.pyplot as plt
+
 warnings.filterwarnings('ignore')
 
 print(f"使用colour库版本: {colour.__version__}")
@@ -130,6 +132,49 @@ class SPDCalculator:
         
         return u, v
     
+    def xyz_to_rgb(self, X, Y, Z, gamma_correction=True):
+        """
+        将XYZ转换为sRGB颜色空间
+        
+        Parameters:
+        X, Y, Z: CIE XYZ三刺激值
+        gamma_correction: 是否应用gamma校正
+        
+        Returns:
+        tuple: (R, G, B) RGB值 (0-255)
+        """
+        # 使用sRGB变换矩阵 (D65照明体)
+        # 矩阵来源: IEC 61966-2-1:1999
+        M = np.array([
+            [ 3.2406, -1.5372, -0.4986],
+            [-0.9689,  1.8758,  0.0415],
+            [ 0.0557, -0.2040,  1.0570]
+        ])
+        
+        # 归一化XYZ (Y=100 -> Y=1)
+        XYZ_norm = np.array([X/100, Y/100, Z/100])
+        
+        # 线性RGB
+        RGB_linear = M @ XYZ_norm
+        
+        if gamma_correction:
+            # 应用sRGB gamma校正
+            def gamma_correct(c):
+                if c <= 0.0031308:
+                    return 12.92 * c
+                else:
+                    return 1.055 * (c ** (1/2.4)) - 0.055
+            
+            RGB_corrected = np.array([gamma_correct(c) for c in RGB_linear])
+        else:
+            RGB_corrected = RGB_linear
+        
+        # 限制在0-1范围内，然后转换为0-255
+        RGB_corrected = np.clip(RGB_corrected, 0, 1)
+        RGB_255 = (RGB_corrected * 255).astype(int)
+        
+        return tuple(RGB_255)
+    
     def chebyshev_polynomials(self, T):
         """
         Chebyshev多项式计算u(T)和v(T)
@@ -163,7 +208,7 @@ class SPDCalculator:
     
     def calculate_cct(self, u, v):
         """
-        计算相关色温CCT
+        计算相关色温CCT - 使用最小化距离的方法
         
         Parameters:
         u, v: CIE 1960 UCS色度坐标
@@ -171,34 +216,36 @@ class SPDCalculator:
         Returns:
         float: 相关色温 (K)
         """
-        def F(T):
-            u_T, v_T, du_T, dv_T = self.chebyshev_polynomials(T)
-            if abs(v_T - v) < 1e-10 or abs(dv_T) < 1e-10:
+        def distance_squared(T):
+            """计算点(u,v)到黑体轨迹上温度T对应点的距离平方"""
+            try:
+                u_T, v_T, _, _ = self.chebyshev_polynomials(T)
+                return (u - u_T)**2 + (v - v_T)**2
+            except:
                 return float('inf')
-            return (u_T - u)/(v_T - v) + du_T/dv_T
+        
+        # 使用scipy的minimize_scalar来寻找最小距离
+        from scipy.optimize import minimize_scalar
         
         try:
-            T_cct = brentq(F, 1000, 20000)
-            return T_cct
-        except ValueError:
-            # 如果在1000-20000K范围内找不到解，尝试扩大范围
-            try:
-                T_cct = brentq(F, 500, 50000)
-                return T_cct
-            except:
-                # 如果仍然失败，使用备用方法
-                print("警告: CCT计算失败，使用近似方法")
-                # 简单的色温估算基于xy坐标
-                X, Y, Z = 1, 1, 1  # 临时值
-                if hasattr(self, 'x_bar') and len(self.x_bar) > 0:
-                    # 基于色度坐标的简单估算
-                    x = u / (u + v)
-                    y = v / (u + v)
-                    n = (x - 0.3320) / (0.1858 - y)
-                    T_approx = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
-                    return max(1000, min(20000, T_approx))
-                else:
-                    return 5500  # 默认中性色温
+            # 在合理的色温范围内寻找最小距离
+            result = minimize_scalar(distance_squared, bounds=(1000, 20000), method='bounded')
+            if result.success:
+                return result.x
+            else:
+                # 如果优化失败，尝试更大范围
+                result = minimize_scalar(distance_squared, bounds=(500, 50000), method='bounded')
+                if result.success:
+                    return result.x
+        except:
+            pass
+        
+        # 如果优化方法失败，使用网格搜索
+        print("警告: 优化方法失败，使用网格搜索")
+        temps = np.linspace(1000, 20000, 1000)
+        distances = [distance_squared(T) for T in temps]
+        min_idx = np.argmin(distances)
+        return temps[min_idx]
     
     def calculate_duv(self, u, v, cct):
         """
@@ -240,30 +287,53 @@ class SPDCalculator:
             
             spd = colour.SpectralDistribution(spd_dict, name='Test SPD')
             
-            # 尝试使用不同版本的TM-30 API
+            # 使用ANSI/IES TM-30-18方法计算颜色保真度和色域指数
             try:
-                # 新版本API
-                tm30_results = colour.colour_rendering_index_tm30(spd)
-                Rf = tm30_results.Rf
-                Rg = tm30_results.Rg
-            except:
+                # colour-science 0.4.6的正确API
+                tm30_results = colour.colour_fidelity_index(
+                    spd, 
+                    additional_data=True, 
+                    method='ANSI/IES TM-30-18'
+                )
+                Rf = tm30_results.R_f
+                Rg = tm30_results.R_g
+                
+                print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}")
+                
+            except Exception as tm30_error:
+                print(f"TM-30计算失败: {tm30_error}")
+                
+                # 备选方案：使用CIE 2017方法
                 try:
-                    # 备选API
-                    tm30_results = colour.tm30_to_result(spd)
-                    Rf = tm30_results['Rf']
-                    Rg = tm30_results['Rg']
-                except:
-                    # 如果TM-30不可用，使用简化的CRI计算
-                    print("警告: TM-30计算不可用，使用简化方法估算")
-                    # 简化计算：基于CIE Ra
+                    cie2017_result = colour.colour_fidelity_index(
+                        spd, 
+                        additional_data=True, 
+                        method='CIE 2017'
+                    )
+                    Rf = cie2017_result.R_f
+                    # CIE 2017没有Rg，使用传统CRI估算
+                    try:
+                        cri = colour.colour_rendering_index(spd)
+                        Rg = max(80, min(120, cri + 10))  # 基于CRI估算Rg
+                    except:
+                        Rg = 100
+                    
+                    print(f"使用CIE 2017方法: Rf={Rf:.1f}, Rg={Rg:.1f}(估算)")
+                    
+                except Exception as cie_error:
+                    print(f"CIE 2017计算也失败: {cie_error}")
+                    
+                    # 最后备选：使用传统CRI
                     try:
                         cri = colour.colour_rendering_index(spd)
                         Rf = cri  # 使用CRI作为Rf的近似
                         Rg = 100  # 默认色域指数
+                        print(f"使用传统CRI方法: Rf={Rf:.1f}, Rg={Rg:.1f}")
                     except:
                         Rf, Rg = 80, 100  # 默认值
+                        print("所有方法都失败，使用默认值")
             
-            return Rf, Rg
+            return float(Rf), float(Rg)
             
         except Exception as e:
             print(f"计算颜色渲染指数时出错: {e}")
@@ -394,6 +464,10 @@ class SPDCalculator:
         mel_der = self.calculate_mel_der(wavelengths, spd_values)
         results['mel-DER'] = mel_der
         
+        # 6. 计算RGB值
+        rgb = self.xyz_to_rgb(X, Y, Z)
+        results['RGB'] = rgb
+        
         # 添加中间结果
         results['XYZ'] = (X, Y, Z)
         results['uv'] = (u, v)
@@ -408,13 +482,19 @@ class SPDCalculator:
         print(f"保真度指数 (Rf): {results['Rf']:.1f}")
         print(f"色域指数 (Rg): {results['Rg']:.1f}")
         print(f"褪黑素日光照度比 (mel-DER): {results['mel-DER']:.3f}")
+        print("\n=== 颜色信息 ===")
+        R, G, B = results['RGB']
+        print(f"sRGB颜色值: R={R}, G={G}, B={B}")
+        print(f"十六进制颜色代码: #{R:02X}{G:02X}{B:02X}")
         print("\n=== 中间计算结果 ===")
         X, Y, Z = results['XYZ']
         u, v = results['uv']
         print(f"CIE XYZ: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f}")
         print(f"CIE 1960 uv: u={u:.4f}, v={v:.4f}")
-
-
+        print(f"色品图坐标: x={X/(X+Y+Z):.4f}, y={Y/(X+Y+Z):.4f}")
+        
+        
+        
 def load_spd_from_excel(file_path, sheet_name=None):
     """
     从Excel文件加载SPD数据
