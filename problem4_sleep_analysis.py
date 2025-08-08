@@ -251,6 +251,7 @@ class SleepDataProcessor:
         data_dict = {
             'subject_id': [m.subject_id for m in self.sleep_metrics],
             'condition': [m.condition for m in self.sleep_metrics],
+            'condition_name': [self.condition_labels[m.condition] for m in self.sleep_metrics],
             'tst': [m.tst for m in self.sleep_metrics],
             'se': [m.se for m in self.sleep_metrics],
             'sol': [m.sol for m in self.sleep_metrics],
@@ -260,6 +261,15 @@ class SleepDataProcessor:
         }
         
         return pd.DataFrame(data_dict)
+    
+    @property
+    def condition_labels(self):
+        """条件标签映射"""
+        return {
+            'A': '优化光照（夜间助眠模式）',
+            'B': '普通LED光照',
+            'C': '黑暗环境'
+        }
 
 class SleepStatisticalAnalyzer:
     """睡眠数据统计分析类"""
@@ -457,6 +467,167 @@ class SleepStatisticalAnalyzer:
         
         return analysis_results
     
+    def save_results_to_csv(self, analysis_results: Dict, output_dir: str = "DataFrames") -> Dict[str, str]:
+        """将分析结果保存为CSV文件"""
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+        
+        saved_files = {}
+        
+        # 1. 保存原始睡眠数据
+        raw_data_file = f"{output_dir}/problem4_sleep_data.csv"
+        self.data.to_csv(raw_data_file, index=False, encoding='utf-8-sig')
+        saved_files['raw_data'] = raw_data_file
+        print(f"原始睡眠数据已保存至: {raw_data_file}")
+        
+        # 2. 保存描述性统计结果
+        descriptive_file = f"{output_dir}/problem4_descriptive_statistics.csv"
+        descriptive_summary = self.data.groupby(['condition']).agg({
+            'tst': ['count', 'mean', 'std', 'median', 'min', 'max'],
+            'se': ['mean', 'std', 'median', 'min', 'max'],
+            'sol': ['mean', 'std', 'median', 'min', 'max'],
+            'n3_percent': ['mean', 'std', 'median', 'min', 'max'],
+            'rem_percent': ['mean', 'std', 'median', 'min', 'max'],
+            'awakenings': ['mean', 'std', 'median', 'min', 'max']
+        }).round(3)
+        
+        # 展平多级列名
+        descriptive_summary.columns = ['_'.join(col).strip() for col in descriptive_summary.columns.values]
+        descriptive_summary.to_csv(descriptive_file, encoding='utf-8-sig')
+        saved_files['descriptive'] = descriptive_file
+        print(f"描述性统计结果已保存至: {descriptive_file}")
+        
+        # 3. 保存统计检验结果
+        stats_results = []
+        
+        # ANOVA结果
+        for metric, result in analysis_results.get('anova_results', {}).items():
+            if result is not None and len(result) > 0:
+                stats_results.append({
+                    'metric': metric,
+                    'test_type': 'Repeated Measures ANOVA',
+                    'statistic': result['F'].iloc[0],
+                    'p_value': result['p-unc'].iloc[0],
+                    'df1': result['DF'].iloc[0],
+                    'df2': result['DF'].iloc[1] if len(result) > 1 else None,
+                    'effect_size_eta2': result['ng2'].iloc[0],
+                    'significant': 'Yes' if result['p-unc'].iloc[0] < 0.05 else 'No'
+                })
+        
+        # Friedman结果
+        for metric, result in analysis_results.get('friedman_results', {}).items():
+            stats_results.append({
+                'metric': metric,
+                'test_type': 'Friedman Test',
+                'statistic': result['statistic'],
+                'p_value': result['p_value'],
+                'df1': 2,  # k-1, k=3
+                'df2': None,
+                'effect_size_eta2': None,
+                'significant': 'Yes' if result['p_value'] < 0.05 else 'No'
+            })
+        
+        if stats_results:
+            stats_file = f"{output_dir}/problem4_statistical_tests.csv"
+            pd.DataFrame(stats_results).to_csv(stats_file, index=False, encoding='utf-8-sig')
+            saved_files['statistical_tests'] = stats_file
+            print(f"统计检验结果已保存至: {stats_file}")
+        
+        # 4. 保存事后比较结果
+        posthoc_results = []
+        for metric, result in analysis_results.get('post_hoc_results', {}).items():
+            if result is not None:
+                for idx, row in result.iterrows():
+                    posthoc_results.append({
+                        'metric': metric,
+                        'comparison': f"{row['A']} vs {row['B']}",
+                        'test_statistic': row['T'],
+                        'p_uncorrected': row['p-unc'],
+                        'p_corrected': row['p-corr'],
+                        'effect_size_hedges': row['hedges'],
+                        'significant_corrected': 'Yes' if row['p-corr'] < 0.05 else 'No'
+                    })
+        
+        if posthoc_results:
+            posthoc_file = f"{output_dir}/problem4_posthoc_comparisons.csv"
+            pd.DataFrame(posthoc_results).to_csv(posthoc_file, index=False, encoding='utf-8-sig')
+            saved_files['posthoc'] = posthoc_file
+            print(f"事后比较结果已保存至: {posthoc_file}")
+        
+        # 5. 保存效应量结果
+        effect_size_results = []
+        for metric, comparisons in analysis_results.get('effect_sizes', {}).items():
+            for comparison, cohens_d in comparisons.items():
+                effect_magnitude = self._interpret_cohens_d(cohens_d)
+                condition_a, condition_b = comparison.split('_vs_')
+                effect_size_results.append({
+                    'metric': metric,
+                    'condition_a': condition_a,
+                    'condition_b': condition_b,
+                    'comparison': comparison,
+                    'cohens_d': round(cohens_d, 4),
+                    'effect_magnitude': effect_magnitude,
+                    'abs_cohens_d': round(abs(cohens_d), 4)
+                })
+        
+        if effect_size_results:
+            effect_size_file = f"{output_dir}/problem4_effect_sizes.csv"
+            pd.DataFrame(effect_size_results).to_csv(effect_size_file, index=False, encoding='utf-8-sig')
+            saved_files['effect_sizes'] = effect_size_file
+            print(f"效应量结果已保存至: {effect_size_file}")
+        
+        # 6. 保存正态性检验结果
+        normality_results = []
+        for metric, conditions in analysis_results.get('normality', {}).items():
+            for condition, p_value in conditions.items():
+                condition_name = self.condition_labels[condition]
+                normality_results.append({
+                    'metric': metric,
+                    'condition': condition,
+                    'condition_name': condition_name,
+                    'shapiro_p_value': p_value,
+                    'normal_distribution': 'Yes' if p_value > 0.05 else 'No'
+                })
+        
+        if normality_results:
+            normality_file = f"{output_dir}/problem4_normality_tests.csv"
+            pd.DataFrame(normality_results).to_csv(normality_file, index=False, encoding='utf-8-sig')
+            saved_files['normality'] = normality_file
+            print(f"正态性检验结果已保存至: {normality_file}")
+        
+        # 7. 保存汇总结果
+        summary_results = []
+        
+        # 按条件汇总关键指标
+        for condition in ['A', 'B', 'C']:
+            condition_data = self.data[self.data['condition'] == condition]
+            condition_name = self.condition_labels[condition]
+            
+            summary_results.append({
+                'condition': condition,
+                'condition_name': condition_name,
+                'sample_size': len(condition_data),
+                'tst_mean': round(condition_data['tst'].mean(), 2),
+                'tst_std': round(condition_data['tst'].std(), 2),
+                'se_mean': round(condition_data['se'].mean(), 2),
+                'se_std': round(condition_data['se'].std(), 2),
+                'sol_mean': round(condition_data['sol'].mean(), 2),
+                'sol_std': round(condition_data['sol'].std(), 2),
+                'n3_percent_mean': round(condition_data['n3_percent'].mean(), 2),
+                'n3_percent_std': round(condition_data['n3_percent'].std(), 2),
+                'rem_percent_mean': round(condition_data['rem_percent'].mean(), 2),
+                'rem_percent_std': round(condition_data['rem_percent'].std(), 2),
+                'awakenings_mean': round(condition_data['awakenings'].mean(), 2),
+                'awakenings_std': round(condition_data['awakenings'].std(), 2)
+            })
+        
+        summary_file = f"{output_dir}/problem4_summary_by_condition.csv"
+        pd.DataFrame(summary_results).to_csv(summary_file, index=False, encoding='utf-8-sig')
+        saved_files['summary'] = summary_file
+        print(f"条件汇总结果已保存至: {summary_file}")
+        
+        return saved_files
+    
     def _interpret_cohens_d(self, d: float) -> str:
         """解释Cohen's d效应量大小"""
         abs_d = abs(d)
@@ -645,8 +816,18 @@ def main():
         print("未发现显著的组间差异。")
         print("可能需要更大的样本量或调整实验设计参数。")
     
+    # 5. 保存结果到CSV文件
+    print("\n" + "=" * 60)
+    print("保存分析结果")
+    print("=" * 60)
+    
+    saved_files = analyzer.save_results_to_csv(results)
+    print(f"\n共保存了{len(saved_files)}个CSV文件:")
+    for file_type, file_path in saved_files.items():
+        print(f"  - {file_type}: {file_path}")
+    
     # 保存结果
-    print(f"\n分析结果已保存至Pictures目录")
+    print(f"\n所有分析结果已保存至DataFrames和Pictures目录")
     
     return df, results
 
