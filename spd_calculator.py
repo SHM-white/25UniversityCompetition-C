@@ -298,7 +298,7 @@ class SPDCalculator:
                 Rf = tm30_results.R_f
                 Rg = tm30_results.R_g
                 
-                print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}")
+                # print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}")
                 
             except Exception as tm30_error:
                 print(f"TM-30计算失败: {tm30_error}")
@@ -416,7 +416,7 @@ class SPDCalculator:
             # 计算mel-DER (测试光源的mel-ELR / D65的mel-ELR)
             mel_DER = mel_ELR / mel_ELR_D65 if mel_ELR_D65 > 0 else 0
             
-            print(f"mel-DER计算成功: mel-ELR={mel_ELR:.3f}, mel-ELR_D65={mel_ELR_D65:.3f}, mel-DER={mel_DER:.3f}")
+            # print(f"mel-DER计算成功: mel-ELR={mel_ELR:.3f}, mel-ELR_D65={mel_ELR_D65:.3f}, mel-DER={mel_DER:.3f}")
             
             return mel_DER
             

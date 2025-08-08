@@ -12,7 +12,18 @@ from scipy.optimize import differential_evolution
 import random
 from spd_calculator import SPDCalculator, load_spd_from_excel
 import warnings
+from tqdm import tqdm
+import os
 warnings.filterwarnings('ignore')
+
+# 检查Pictures文件夹和DataFrames文件夹
+if not os.path.exists('Pictures'):
+    os.makedirs('Pictures')
+if not os.path.exists('DataFrames'):
+    os.makedirs('DataFrames')
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial', '微软雅黑', 'Microsoft YaHei']  # 设置中文字体
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 class LEDOptimizer:
     def __init__(self, led_data_path="C/附录2_LED_SPD.xlsx"):
@@ -128,11 +139,11 @@ class LEDOptimizer:
             objective = -rf
             
             # 约束条件的惩罚项
-            penalty = 0
+            penalty = 10
             
             # CCT约束：6000±500K
             if cct < 5500 or cct > 6500:
-                penalty += 100 * abs(cct - 6000) / 1000
+                penalty += 180 * abs(cct - 6000) / 1000
             
             # Rg约束：95-105
             if rg < 95:
@@ -142,7 +153,7 @@ class LEDOptimizer:
             
             # Rf约束：>88
             if rf < 88:
-                penalty += 100 * (88 - rf)
+                penalty += 200 * (88 - rf)
             
             return objective + penalty
             
@@ -183,7 +194,7 @@ class LEDOptimizer:
             mel_der = results['mel-DER']
             
             # 目标函数：最小化mel-DER
-            objective = mel_der
+            objective = mel_der * 10
             
             # 约束条件的惩罚项
             penalty = 0
@@ -214,7 +225,7 @@ class GeneticAlgorithm:
         mutation_rate: 变异率
         crossover_rate: 交叉率
         """
-        self.optimizer = optimizer
+        self.optimizer : LEDOptimizer = optimizer
         self.population_size = population_size
         self.generations = generations
         self.mutation_rate = mutation_rate
@@ -241,7 +252,7 @@ class GeneticAlgorithm:
                 raise ValueError("模式必须是'daylight'或'night'")
             
             # 转换为适应度（目标函数值越小，适应度越高）
-            fitness.append(1.0 / (1.0 + obj_value))
+            fitness.append(10.0 / (10.0 + obj_value))
         
         return np.array(fitness)
     
@@ -306,7 +317,13 @@ class GeneticAlgorithm:
         population = self.initialize_population()
         fitness_history = []
         
-        for generation in range(self.generations):
+        # 创建进度条
+        mode_name = "日间照明" if mode == 'daylight' else "夜间助眠"
+        pbar = tqdm(range(self.generations), 
+                   desc=f"{mode_name}模式优化", 
+                   unit="代")
+        
+        for generation in pbar:
             # 评估适应度
             fitness = self.evaluate_fitness(population, mode)
             
@@ -314,9 +331,11 @@ class GeneticAlgorithm:
             best_fitness = np.max(fitness)
             fitness_history.append(best_fitness)
             
-            if verbose and generation % 20 == 0:
-                best_obj = 1.0 / best_fitness - 1.0
-                print(f"第{generation}代: 最佳目标函数值 = {best_obj:.4f}")
+            # 更新进度条描述
+            pbar.set_postfix({
+                '代数': f"{generation+1}/{self.generations}",
+                '最佳适应度': f"{best_fitness:.4f}"
+            })
             
             # 选择
             selected_population = self.selection(population, fitness)
@@ -335,12 +354,17 @@ class GeneticAlgorithm:
             
             population = np.array(new_population[:self.population_size])
         
+        # 关闭进度条
+        pbar.close()
+        
         # 返回最佳解
         final_fitness = self.evaluate_fitness(population, mode)
         best_idx = np.argmax(final_fitness)
         best_weights = population[best_idx]
         best_fitness = final_fitness[best_idx]
-        
+
+        print(f"\n{mode_name}模式优化完成！最终适应度: {best_fitness:.4f}")
+
         return best_weights, best_fitness, fitness_history
 
 def analyze_solution(optimizer, weights, mode_name):
@@ -382,7 +406,7 @@ def plot_optimization_history(fitness_history_day, fitness_history_night):
     plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig('optimization_history.png', dpi=300, bbox_inches='tight')
+    plt.savefig('Pictures/optimization_history.svg', format='svg', dpi=300, bbox_inches='tight')
     plt.show()
 
 def plot_synthesized_spectra(optimizer, weights_day, weights_night):
@@ -410,14 +434,17 @@ def plot_synthesized_spectra(optimizer, weights_day, weights_night):
     # 下图：各通道贡献
     plt.subplot(2, 1, 2)
     channel_names = ['蓝光', '绿光', '红光', '暖白光', '冷白光']
-    colors = ['blue', 'green', 'red', 'orange', 'lightblue']
-    
+    # colors = ['blue', 'green', 'red', 'orange', 'lightblue']
+
+    colorDaylight = 'orange'
+    colorNight = 'lightblue'
+
     x = np.arange(len(channel_names))
     width = 0.35
-    
-    plt.bar(x - width/2, weights_day_norm, width, label='日间模式', alpha=0.7, color=colors)
-    plt.bar(x + width/2, weights_night_norm, width, label='夜间模式', alpha=0.7, color=colors)
-    
+
+    plt.bar(x - width/2, weights_day_norm, width, label='日间模式', alpha=0.7, color=colorDaylight)
+    plt.bar(x + width/2, weights_night_norm, width, label='夜间模式', alpha=0.7, color=colorNight)
+
     plt.xlabel('LED通道')
     plt.ylabel('权重')
     plt.title('各通道权重对比')
@@ -426,7 +453,7 @@ def plot_synthesized_spectra(optimizer, weights_day, weights_night):
     plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('synthesized_spectra_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('Pictures/synthesized_spectra_comparison.svg', dpi=300, format='svg', bbox_inches='tight')
     plt.show()
 
 def main():
@@ -487,9 +514,9 @@ def main():
     }
     
     df_results = pd.DataFrame(results_summary)
-    df_results.to_csv('optimization_results.csv', index=False, encoding='utf-8-sig')
-    print("\n结果已保存到 optimization_results.csv")
-    
+    df_results.to_csv('DataFrames/optimization_results.csv', index=False, encoding='utf-8-sig')
+    print("\n结果已保存到 DataFrames/optimization_results.csv")
+
     return optimizer, weights_day, weights_night, results_day, results_night
 
 if __name__ == "__main__":
