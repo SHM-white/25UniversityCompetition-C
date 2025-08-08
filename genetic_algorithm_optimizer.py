@@ -136,25 +136,35 @@ class LEDOptimizer:
             rg = results['Rg']
             
             # 目标函数：最大化Rf（转为最小化问题）
-            objective = -rf
+            # 增强对高Rf的奖励，目标是接近100
+            if rf >= 95:
+                objective = -(rf + 20)  # 对高Rf给更大奖励
+            elif rf >= 90:
+                objective = -(rf + 5)   # 对较高Rf给小奖励
+            else:
+                objective = -rf
             
             # 约束条件的惩罚项
-            penalty = 10
+            penalty = 0
             
-            # CCT约束：6000±500K
+            # CCT约束：6000±500K，增强惩罚力度
             if cct < 5500 or cct > 6500:
-                penalty += 180 * abs(cct - 6000) / 1000
+                penalty += 800 * abs(cct - 6000) / 1000  # 进一步增加到800
             
             # Rg约束：95-105
             if rg < 95:
-                penalty += 50 * (95 - rg)
+                penalty += 100 * (95 - rg)  # 从80增加到100
             elif rg > 105:
-                penalty += 50 * (rg - 105)
+                penalty += 100 * (rg - 105)
             
-            # Rf约束：>88
+            # Rf约束：>88，增强对低Rf的惩罚
             if rf < 88:
-                penalty += 200 * (88 - rf)
+                penalty += 1000 * (88 - rf)  # 从500增加到1000
             
+            # 额外奖励机制：Rf越高越好
+            if rf < 100:
+                penalty += 300 * (100 - rf)  # 新目标：鼓励Rf超过100
+
             return objective + penalty
             
         except Exception as e:
@@ -194,7 +204,7 @@ class LEDOptimizer:
             mel_der = results['mel-DER']
             
             # 目标函数：最小化mel-DER
-            objective = mel_der * 10
+            objective = mel_der * 100
             
             # 约束条件的惩罚项
             penalty = 0
