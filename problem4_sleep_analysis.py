@@ -495,7 +495,7 @@ class SleepVisualization:
             'C': '黑暗环境'
         }
     
-    def plot_boxplots(self, save_path: str = "Pictures/sleep_metrics_boxplots.png"):
+    def plot_boxplots(self, save_path: str = "Pictures/sleep_metrics_boxplots.svg"):
         """绘制箱线图"""
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         axes = axes.ravel()
@@ -523,11 +523,11 @@ class SleepVisualization:
             ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, format='svg', dpi=300, bbox_inches='tight')
         plt.show()
         print(f"箱线图已保存至: {save_path}")
     
-    def plot_individual_trajectories(self, save_path: str = "Pictures/individual_trajectories.png"):
+    def plot_individual_trajectories(self, save_path: str = "Pictures/individual_trajectories.svg"):
         """绘制个体轨迹图"""
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         axes = axes.ravel()
@@ -561,11 +561,11 @@ class SleepVisualization:
                 ax.legend()
         
         plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, format='svg', dpi=300, bbox_inches='tight')
         plt.show()
         print(f"个体轨迹图已保存至: {save_path}")
     
-    def plot_correlation_heatmap(self, save_path: str = "Pictures/sleep_metrics_correlation.png"):
+    def plot_correlation_heatmap(self, save_path: str = "Pictures/sleep_metrics_correlation.svg"):
         """绘制睡眠指标相关性热图"""
         # 计算相关性矩阵
         corr_matrix = self.data[self.metrics].corr()
@@ -578,7 +578,7 @@ class SleepVisualization:
         
         plt.title('睡眠质量指标相关性矩阵', fontsize=16, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, format='svg', dpi=300, bbox_inches='tight')
         plt.show()
         print(f"相关性热图已保存至: {save_path}")
 
