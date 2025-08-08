@@ -17,6 +17,7 @@ import warnings
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore')
+plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'DejaVu Sans', '微软雅黑']
 
 print(f"使用colour库版本: {colour.__version__}")
 
@@ -576,9 +577,25 @@ class SPDCalculator:
         print(f"CIE XYZ: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f}")
         print(f"CIE 1960 uv: u={u:.4f}, v={v:.4f}")
         print(f"色品图坐标: x={X/(X+Y+Z):.4f}, y={Y/(X+Y+Z):.4f}")
-        
-        
-        
+
+    def drawColour(self, results):
+        """绘制颜色块和在uv色品图上的位置"""
+        R, G, B = results['RGB']
+        hex_color = f'#{R:02X}{G:02X}{B:02X}'
+        u, v = results['uv']
+        fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+        # Convert RGB values to normalized format for imshow
+        rgb_normalized = np.array([[[R/255, G/255, B/255]]])
+        ax[0].imshow(rgb_normalized)
+        ax[0].axis('off')
+        ax[0].set_title(f"Color: {hex_color}", fontsize=16)
+        ax[1].plot(u, v, 'o', color=hex_color, markersize=10)
+        ax[1].set_xlabel("CIE 1960 u")
+        ax[1].set_ylabel("CIE 1960 v")
+        ax[1].set_title("CIE 1960 色品图")
+        ax[1].grid()
+        plt.show()
+
 def load_spd_from_excel(file_path, sheet_name=None):
     """
     从Excel文件加载SPD数据
@@ -717,6 +734,7 @@ def example_usage():
     
     # 打印结果
     calculator.print_results(results)
+    calculator.drawColour(results)
     
     return results
 
