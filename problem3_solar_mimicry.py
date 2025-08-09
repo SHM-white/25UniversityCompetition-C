@@ -442,15 +442,15 @@ class SolarSpectrumMimicry:
             representative_points = control_sequence
             labels = [f'时间点{i+1}' for i in range(len(representative_points))]
         
-        # 创建更复杂的图表布局: 3列×3行
-        fig = plt.figure(figsize=(20, 15))
+        # 创建图表布局: 2列×3行 (光谱对比图在第一行，参数对比图在第二行)
+        fig = plt.figure(figsize=(20, 12))
         
         for i, (result, label) in enumerate(zip(representative_points, labels)):
             if i >= 3:  # 最多显示3个时间点
                 break
                 
             # 光谱对比图 (第一行)
-            ax_spectrum = plt.subplot(3, 3, i+1)
+            ax_spectrum = plt.subplot(2, 3, i+1)
             ax_spectrum.plot(self.wavelengths, result['target_spectrum'], 
                     'b-', linewidth=2, label='目标太阳光谱')
             ax_spectrum.plot(self.wavelengths, result['synthesized_spectrum'], 
@@ -461,85 +461,106 @@ class SolarSpectrumMimicry:
             ax_spectrum.legend()
             ax_spectrum.grid(True, alpha=0.3)
             
-            # 色度参数对比图 (第二行) - CCT和Duv
-            ax_color = plt.subplot(3, 3, i+4)
+            # 参数对比图 (第二行) - 使用双纵坐标
+            ax_params = plt.subplot(2, 3, i+4)
             target_params = result['target_params']
             synthetic_params = result['synthetic_params']
             
-            # CCT和Duv的归一化显示
-            cct_target = target_params.get('CCT', 0) / 10
-            cct_synthetic = synthetic_params.get('CCT', 0) / 10
-            duv_target = target_params.get('Duv', 0) * 10000  # 放大10000倍
-            duv_synthetic = synthetic_params.get('Duv', 0) * 10000  # 放大10000倍
-
-            color_params = ['CCT (×10K)', 'Duv (×10000)']
-            color_target = [cct_target, duv_target]
-            color_synthetic = [cct_synthetic, duv_synthetic]
-            
-            x_color = np.arange(len(color_params))
-            width = 0.35
-            
-            bars1 = ax_color.bar(x_color - width/2, color_target, width, label='目标值', alpha=0.7, color='lightblue')
-            bars2 = ax_color.bar(x_color + width/2, color_synthetic, width, label='合成值', alpha=0.7, color='lightcoral')
-            
-            # 在柱状图上添加数值
-            for j, (bar, value) in enumerate(zip(bars1, color_target)):
-                height = bar.get_height()
-                format_str = '{:.0f}' if j == 0 else '{:.1f}'  # CCT用整数，Duv用一位小数
-                ax_color.text(bar.get_x() + bar.get_width()/2., height + max(max(color_target), max(color_synthetic)) * 0.02,
-                             format_str.format(value), ha='center', va='bottom', fontsize=9)
-            
-            for j, (bar, value) in enumerate(zip(bars2, color_synthetic)):
-                height = bar.get_height()
-                format_str = '{:.0f}' if j == 0 else '{:.1f}'  # CCT用整数，Duv用一位小数
-                ax_color.text(bar.get_x() + bar.get_width()/2., height + max(max(color_target), max(color_synthetic)) * 0.02,
-                             format_str.format(value), ha='center', va='bottom', fontsize=9)
-            
-            ax_color.set_xlabel('色度参数')
-            ax_color.set_ylabel('数值')
-            ax_color.set_title(f'{label} 色度参数对比')
-            ax_color.set_xticks(x_color)
-            ax_color.set_xticklabels(color_params)
-            ax_color.legend()
-            ax_color.grid(True, alpha=0.3)
-            
-            # 质量参数对比图 (第三行) - mel-DER, Rf, Rg
-            ax_quality = plt.subplot(3, 3, i+7)
-            
-            mel_target = target_params.get('mel-DER', 0)
-            mel_synthetic = synthetic_params.get('mel-DER', 0)
+            # 准备所有参数数据
+            cct_target = target_params.get('CCT', 0)
+            cct_synthetic = synthetic_params.get('CCT', 0)
+            duv_target = target_params.get('Duv', 0) * 100
+            duv_synthetic = synthetic_params.get('Duv', 0) * 100
+            mel_target = target_params.get('mel-DER', 0) * 10
+            mel_synthetic = synthetic_params.get('mel-DER', 0) * 10
             rf_target = target_params.get('Rf', 0)
             rf_synthetic = synthetic_params.get('Rf', 0)
             rg_target = target_params.get('Rg', 0)
             rg_synthetic = synthetic_params.get('Rg', 0)
             
-            quality_params = ['mel-DER', 'Rf', 'Rg']
-            quality_target = [mel_target, rf_target, rg_target]
-            quality_synthetic = [mel_synthetic, rf_synthetic, rg_synthetic]
+            # 设置参数名称和位置
+            param_names = ['CCT', 'Duv', 'mel-DER', 'Rf', 'Rg']
+            x_pos = np.arange(len(param_names))
+            width = 0.35
             
-            x_quality = np.arange(len(quality_params))
+            # CCT数据（使用左侧纵坐标）
+            cct_target_vals = [cct_target, 0, 0, 0, 0]
+            cct_synthetic_vals = [cct_synthetic, 0, 0, 0, 0]
             
-            bars3 = ax_quality.bar(x_quality - width/2, quality_target, width, label='目标值', alpha=0.7, color='lightgreen')
-            bars4 = ax_quality.bar(x_quality + width/2, quality_synthetic, width, label='合成值', alpha=0.7, color='gold')
+            # 其他参数数据（使用右侧纵坐标）
+            other_target_vals = [0, duv_target, mel_target, rf_target, rg_target]
+            other_synthetic_vals = [0, duv_synthetic, mel_synthetic, rf_synthetic, rg_synthetic]
+            
+            # 绘制CCT柱状图（左侧纵坐标）
+            bars_cct_target = ax_params.bar([0 - width/2], [cct_target], width, 
+                                           label='CCT目标值', alpha=0.7, color='lightblue')
+            bars_cct_synthetic = ax_params.bar([0 + width/2], [cct_synthetic], width, 
+                                             label='CCT合成值', alpha=0.7, color='lightcoral')
+            
+            # 创建右侧纵坐标轴
+            ax_params_right = ax_params.twinx()
+            
+            # 绘制其他参数柱状图（右侧纵坐标）
+            other_x_pos = x_pos[1:]  # 除了CCT的其他位置
+            other_target_data = [duv_target, mel_target, rf_target, rg_target]
+            other_synthetic_data = [duv_synthetic, mel_synthetic, rf_synthetic, rg_synthetic]
+            
+            bars_other_target = ax_params_right.bar(other_x_pos - width/2, other_target_data, width,
+                                                   label='其他参数目标值', alpha=0.7, color='lightgreen')
+            bars_other_synthetic = ax_params_right.bar(other_x_pos + width/2, other_synthetic_data, width,
+                                                     label='其他参数合成值', alpha=0.7, color='gold')
             
             # 添加数值标签
-            for bar, value in zip(bars3, quality_target):
+            # CCT标签
+            for bar, value in zip(bars_cct_target, [cct_target]):
                 height = bar.get_height()
-                ax_quality.text(bar.get_x() + bar.get_width()/2., height + max(max(quality_target), max(quality_synthetic)) * 0.02,
-                               f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+                ax_params.text(bar.get_x() + bar.get_width()/2., height + cct_target * 0.02,
+                              f'{value:.0f}K', ha='center', va='bottom', fontsize=9)
             
-            for bar, value in zip(bars4, quality_synthetic):
+            for bar, value in zip(bars_cct_synthetic, [cct_synthetic]):
                 height = bar.get_height()
-                ax_quality.text(bar.get_x() + bar.get_width()/2., height + max(max(quality_target), max(quality_synthetic)) * 0.02,
-                               f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+                ax_params.text(bar.get_x() + bar.get_width()/2., height + cct_synthetic * 0.02,
+                              f'{value:.0f}K', ha='center', va='bottom', fontsize=9)
             
-            ax_quality.set_xlabel('质量参数')
-            ax_quality.set_ylabel('数值')
-            ax_quality.set_title(f'{label} 质量参数对比')
-            ax_quality.set_xticks(x_quality)
-            ax_quality.set_xticklabels(quality_params)
-            ax_quality.legend()
-            ax_quality.grid(True, alpha=0.3)
+            # 其他参数标签
+            for bar, value, param in zip(bars_other_target, other_target_data, param_names[1:]):
+                height = bar.get_height()
+                if param == 'Duv':
+                    label_text = f'{value:.4f}'
+                elif param == 'mel-DER':
+                    label_text = f'{value:.3f}'
+                else:  # Rf, Rg
+                    label_text = f'{value:.1f}'
+                ax_params_right.text(bar.get_x() + bar.get_width()/2., height + max(other_target_data) * 0.02,
+                                   label_text, ha='center', va='bottom', fontsize=9)
+            
+            for bar, value, param in zip(bars_other_synthetic, other_synthetic_data, param_names[1:]):
+                height = bar.get_height()
+                if param == 'Duv':
+                    label_text = f'{value:.4f}'
+                elif param == 'mel-DER':
+                    label_text = f'{value:.3f}'
+                else:  # Rf, Rg
+                    label_text = f'{value:.1f}'
+                ax_params_right.text(bar.get_x() + bar.get_width()/2., height + max(other_synthetic_data) * 0.02,
+                                   label_text, ha='center', va='bottom', fontsize=9)
+            
+            # 设置坐标轴标签和标题
+            ax_params.set_xlabel('参数类型')
+            ax_params.set_ylabel('CCT (K)', color='red')
+            ax_params_right.set_ylabel('其他参数数值', color='blue')
+            ax_params.set_title(f'{label} 全参数对比')
+            
+            # 设置x轴刻度
+            ax_params.set_xticks(x_pos)
+            ax_params.set_xticklabels(param_names)
+            
+            # 设置图例
+            lines1, labels1 = ax_params.get_legend_handles_labels()
+            lines2, labels2 = ax_params_right.get_legend_handles_labels()
+            ax_params.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+            
+            ax_params.grid(True, alpha=0.3)
             
             # 在光谱图上添加详细信息
             info_text = f"权重: B={result['weights'][0]:.3f}, G={result['weights'][1]:.3f}, R={result['weights'][2]:.3f}, WW={result['weights'][3]:.3f}, CW={result['weights'][4]:.3f}\n"

@@ -1,0 +1,1 @@
+Get-ChildItem -Filter *.svg | ForEach-Object { inkscape --export-type="pdf" $_.FullName }

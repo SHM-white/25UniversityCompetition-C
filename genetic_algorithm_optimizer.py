@@ -113,7 +113,7 @@ class LEDOptimizer:
         weights: 权重数组 [Blue, Green, Red, Warm White, Cold White]
         
         Returns:
-        float: 目标函数值（越小越好）
+        float: 目标函数值（越小越好，范围控制在[-1.0, +∞)）
         """
         try:
             # 权重归一化
@@ -135,37 +135,66 @@ class LEDOptimizer:
             rf = results['Rf']
             rg = results['Rg']
             
-            # 目标函数：最大化Rf（转为最小化问题）
-            # 增强对高Rf的奖励，目标是接近100
-            if rf >= 95:
-                objective = -(rf + 20)  # 对高Rf给更大奖励
-            elif rf >= 90:
-                objective = -(rf + 5)   # 对较高Rf给小奖励
-            else:
-                objective = -rf
+            # 基础目标函数：极度强化对Rf=100的追求
+            rf_clamped = max(0, min(100, rf))
             
-            # 约束条件的惩罚项
+            # 使用多段非线性函数，对接近100的Rf给予指数级奖励
+            if rf_clamped >= 98:
+                # Rf≥98时，每0.1的提升都有显著收益
+                base_objective = 0.01 * (100 - rf_clamped) ** 3  # 立方函数，让最后几个点非常重要
+            elif rf_clamped >= 95:
+                # Rf 95-98区间，平方函数
+                base_objective = 0.1 + 0.05 * (98 - rf_clamped) ** 2
+            elif rf_clamped >= 90:
+                # Rf 90-95区间，线性增长
+                base_objective = 0.5 + 0.1 * (95 - rf_clamped)
+            else:
+                # Rf <90，大幅惩罚
+                base_objective = 1.0 + 0.2 * (90 - rf_clamped)
+            
+            # 约束违反的惩罚项 - 进一步放宽以优先追求高Rf
             penalty = 0
             
-            # CCT约束：6000±500K，增强惩罚力度
-            if cct < 5500 or cct > 6500:
-                penalty += 800 * abs(cct - 6000) / 1000  # 进一步增加到800
+            # CCT约束：6000±500K，平衡CCT和Rf的关系
+            cct_target = 6000
+            cct_tolerance = 500
+            if cct < (cct_target - cct_tolerance) or cct > (cct_target + cct_tolerance):
+                cct_deviation = abs(cct - cct_target) - cct_tolerance
+                penalty += 8.0 * (cct_deviation / 1000.0)  # 适中的CCT惩罚，保证基本约束
             
-            # Rg约束：95-105
+            # Rg约束：95-105，继续减小惩罚
             if rg < 95:
-                penalty += 100 * (95 - rg)  # 从80增加到100
+                penalty += 2.0 * (95 - rg) / 10.0  # 继续减少Rg惩罚
             elif rg > 105:
-                penalty += 100 * (rg - 105)
+                penalty += 2.0 * (rg - 105) / 10.0
             
-            # Rf约束：>88，增强对低Rf的惩罚
+            # Rf最低要求约束：>88，保持强惩罚但不过度
             if rf < 88:
-                penalty += 1000 * (88 - rf)  # 从500增加到1000
+                penalty += 15.0 * (88 - rf) / 10.0  # 稍微减少以避免过度限制
             
-            # 额外奖励机制：Rf越高越好
-            if rf < 100:
-                penalty += 300 * (100 - rf)  # 新目标：鼓励Rf超过100
-
-            return objective + penalty
+            # 计算最终目标函数值
+            total_objective = base_objective + penalty
+            
+            # 超级奖励机制：对极高Rf给予巨大奖励
+            if penalty <= 0.5:  # 约束基本满足
+                if rf >= 99:
+                    # Rf≥99时给予超级奖励
+                    reward = min(0.95, 0.5 * (rf - 95))  # 更大的奖励
+                    total_objective = max(-1.0, base_objective - reward)
+                elif rf >= 96:
+                    # Rf≥96时给予大奖励
+                    reward = min(0.8, 0.3 * (rf - 92))
+                    total_objective = max(-1.0, base_objective - reward)
+                elif rf >= 92:
+                    # Rf≥92时给予中等奖励
+                    reward = min(0.5, 0.1 * (rf - 88))
+                    total_objective = max(-1.0, base_objective - reward)
+                else:
+                    total_objective = max(-1.0, total_objective)
+            else:
+                total_objective = max(-1.0, total_objective)
+            
+            return total_objective
             
         except Exception as e:
             print(f"计算日间模式目标函数时出错: {e}")
@@ -181,7 +210,7 @@ class LEDOptimizer:
         weights: 权重数组 [Blue, Green, Red, Warm White, Cold White]
         
         Returns:
-        float: 目标函数值（越小越好）
+        float: 目标函数值（越小越好，范围控制在[-1.0, +∞)）
         """
         try:
             # 权重归一化
@@ -203,21 +232,38 @@ class LEDOptimizer:
             rf = results['Rf']
             mel_der = results['mel-DER']
             
-            # 目标函数：最小化mel-DER
-            objective = mel_der * 100
+            # 基础目标函数：mel-DER标准化
+            # mel-DER通常在0-1.5范围内，我们希望其越小越好
+            mel_der_clamped = max(0, min(2.0, mel_der))  # 限制在合理范围
+            base_objective = 2.0 * mel_der_clamped  # 标准化到[0,4]范围
             
-            # 约束条件的惩罚项
+            # 约束违反的惩罚项
             penalty = 0
             
             # CCT约束：3000±500K
-            if cct < 2500 or cct > 3500:
-                penalty += 100 * abs(cct - 3000) / 1000
+            cct_target = 3000
+            cct_tolerance = 500
+            if cct < (cct_target - cct_tolerance) or cct > (cct_target + cct_tolerance):
+                cct_deviation = abs(cct - cct_target) - cct_tolerance
+                penalty += 8.0 * (cct_deviation / 1000.0)  # 标准化惩罚
             
             # Rf约束：≥80
             if rf < 80:
-                penalty += 100 * (80 - rf)
+                penalty += 10.0 * (80 - rf) / 10.0  # 标准化惩罚
             
-            return objective + penalty
+            # 计算最终目标函数值
+            total_objective = base_objective + penalty
+            
+            # 确保最终值不小于-1.0，同时保持优化方向正确
+            # 当所有约束满足且mel-DER很低时，给予适当奖励但不超过-1.0的限制
+            if penalty == 0 and mel_der <= 0.3:
+                # 无约束违反且mel-DER很低时，给予奖励
+                reward = min(0.9, 0.5 * (0.3 - mel_der))  # mel-DER越低奖励越大
+                total_objective = max(-1.0, base_objective - reward)
+            else:
+                total_objective = max(-1.0, total_objective)
+            
+            return total_objective
             
         except Exception as e:
             print(f"计算夜间模式目标函数时出错: {e}")
@@ -262,7 +308,7 @@ class GeneticAlgorithm:
                 raise ValueError("模式必须是'daylight'或'night'")
             
             # 转换为适应度（目标函数值越小，适应度越高）
-            fitness.append(10.0 / (10.0 + obj_value))
+            fitness.append(1.0 / (1.0 + obj_value))
         
         return np.array(fitness)
     
@@ -473,13 +519,13 @@ def main():
     # 创建优化器
     optimizer = LEDOptimizer()
     
-    # 创建遗传算法实例
+    # 创建遗传算法实例，针对Rf优化调整参数
     ga = GeneticAlgorithm(
         optimizer=optimizer,
-        population_size=100,
-        generations=200,
-        mutation_rate=0.1,
-        crossover_rate=0.7
+        population_size=150,      # 增加种群大小以提高搜索能力
+        generations=500,          # 增加进化代数以充分搜索
+        mutation_rate=0.12,       # 稍微降低变异率以保持好解
+        crossover_rate=0.8        # 增加交叉率以促进基因重组
     )
     
     # 优化日间照明模式
