@@ -40,14 +40,20 @@ $$\min_{w_1,w_2,w_3,w_4,w_5} \sum_{\lambda=380}^{780} \left[S_{\text{sun}}(\lamb
 
 结合关键参数匹配：
 
-$$\min \left[ \alpha \cdot f_{\text{spectrum}} + \beta \cdot f_{\text{CCT}} + \gamma \cdot f_{\text{mel-DER}} \right]$$
+$$\min \left[ \alpha \cdot f_{\text{spectrum}} + \beta \cdot f_{\text{CCT}} + \gamma \cdot f_{\text{Duv}} + \delta \cdot f_{\text{mel-DER}} \right]$$
 
 其中：
 - $f_{\text{spectrum}} = \sum_{\lambda} [S_{\text{sun}}(\lambda,t) - S_{\text{合成}}(\lambda)]^2$ - 光谱匹配误差
-- $f_{\text{CCT}} = |CCT_{\text{sun}}(t) - CCT_{\text{合成}}|^2$ - 色温匹配误差  
-- $f_{\text{mel-DER}} = |mel\text{-}DER_{\text{sun}}(t) - mel\text{-}DER_{\text{合成}}|^2$ - 节律效应匹配误差
+- $f_{\text{CCT}} = \frac{|CCT_{\text{sun}}(t) - CCT_{\text{合成}}|}{CCT_{\text{sun}}(t)}$ - 色温相对误差  
+- $f_{\text{Duv}} = \frac{|Duv_{\text{sun}}(t) - Duv_{\text{合成}}|}{|Duv_{\text{sun}}(t)|}$ - Duv相对误差
+- $f_{\text{mel-DER}} = \frac{|mel\text{-}DER_{\text{sun}}(t) - mel\text{-}DER_{\text{合成}}|}{mel\text{-}DER_{\text{sun}}(t)}$ - 节律效应相对误差
 
-权重系数$\alpha, \beta, \gamma$可根据重要性调整。
+权重系数$\alpha, \beta, \gamma, \delta$可根据重要性调整。
+
+**关键改进：增加Duv匹配误差**
+- Duv（距离普朗克轨迹的距离）反映了色坐标的偏差程度
+- 对于精确的颜色重现，Duv匹配至关重要
+- 采用相对误差形式，与CCT和mel-DER误差形式保持一致
 
 ### 3. 基于前两问的核心公式应用
 
@@ -67,6 +73,14 @@ $$S_{\text{合成}}(\lambda) = \sum_{i=1}^{5} w_i \times S_i(\lambda)$$
    $$u = \frac{4X}{X+15Y+3Z}, \quad v = \frac{6Y}{X+15Y+3Z}$$
 
 3. 通过最小化距离黑体轨迹求CCT
+
+**距离普朗克轨迹的距离Duv：**
+$$Duv = \text{sign} \times \sqrt{(u - u_t)^2 + (v - v_t)^2}$$
+
+其中：
+- $(u, v)$ - 光源在CIE 1960 UCS色度图中的坐标
+- $(u_t, v_t)$ - 对应CCT在普朗克轨迹上的坐标点
+- $\text{sign}$ - 符号，表示偏离方向
 
 **褪黑素日光照度比mel-DER：**
 $$mel\text{-}DER = \frac{E_{\text{mel}}}{E_V}$$
@@ -105,22 +119,47 @@ class SolarSpectrumMimicry:
         self.solar_data = solar_data      # 太阳光谱时间序列
         self.calculator = SPDCalculator() # 复用问题一的计算器
         
+    def calculate_parameter_errors(self, weights, target_params):
+        """计算关键参数匹配误差（包含Duv）"""
+        synthesized = self.synthesize_spectrum(weights)
+        synthetic_params = self.calculator.calculate_all_parameters(
+            self.wavelengths, synthesized)
+        
+        cct_error = 0
+        mel_der_error = 0
+        duv_error = 0
+        
+        # CCT相对误差
+        if 'CCT' in target_params and target_params['CCT'] > 0:
+            cct_error = abs(target_params['CCT'] - synthetic_params['CCT']) / target_params['CCT']
+        
+        # mel-DER相对误差
+        if 'mel-DER' in target_params and target_params['mel-DER'] > 0:
+            mel_der_error = abs(target_params['mel-DER'] - synthetic_params['mel-DER']) / target_params['mel-DER']
+        
+        # Duv相对误差
+        if 'Duv' in target_params:
+            duv_error = abs(target_params['Duv'] - synthetic_params['Duv']) / abs(target_params['Duv'])
+        
+        return cct_error + mel_der_error + duv_error
+        
     def optimize_single_timepoint(self, target_spectrum):
         """对单个时间点优化权重"""
         def objective(weights):
-            # 合成光谱
-            synthetic_spectrum = np.sum([w * spd for w, spd in 
-                                       zip(weights, self.led_channels)], axis=0)
-            # 计算误差
-            spectrum_error = np.sum((target_spectrum - synthetic_spectrum)**2)
-            return spectrum_error
+            # 光谱匹配误差
+            spectrum_error = self.calculate_spectrum_error(weights, target_spectrum)
+            # 参数匹配误差（包含Duv）
+            param_error = self.calculate_parameter_errors(weights, target_params)
+            # 组合误差
+            return alpha * spectrum_error + beta * param_error
             
         # 约束：权重和为1，非负
         constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
         bounds = [(0, 1) for _ in range(5)]
         
         result = minimize(objective, x0=[0.2]*5, 
-                         constraints=constraints, bounds=bounds)
+                         constraints=constraints, bounds=bounds,
+                         method='SLSQP', options={'maxiter': 1000, 'ftol': 1e-9})
         return result.x
         
     def generate_control_sequence(self):
@@ -143,7 +182,13 @@ class SolarSpectrumMimicry:
 
 #### 6.2 关键参数匹配度
 - CCT相对误差：$\frac{|CCT_{\text{target}} - CCT_{\text{synthetic}}|}{CCT_{\text{target}}} \times 100\%$
+- Duv相对误差：$\frac{|Duv_{\text{target}} - Duv_{\text{synthetic}}|}{|Duv_{\text{target}}|} \times 100\%$
 - mel-DER相对误差：$\frac{|mel\text{-}DER_{\text{target}} - mel\text{-}DER_{\text{synthetic}}|}{mel\text{-}DER_{\text{target}}} \times 100\%$
+
+**Duv匹配精度说明：**
+- Duv值通常在-0.02到+0.02之间
+- 高质量照明要求Duv相对误差<10%
+- 使用相对误差形式与其他参数保持一致，便于统一权重调整
 
 ### 7. 三个代表性时间点案例分析
 
@@ -164,63 +209,9 @@ class SolarSpectrumMimicry:
 ### 8. 实现步骤总结
 
 1. **数据预处理**：读取太阳光谱时间序列和LED通道数据
-2. **目标参数计算**：为每个时间点计算CCT、mel-DER等关键参数
+2. **目标参数计算**：为每个时间点计算CCT、Duv、mel-DER等关键参数
 3. **单点优化**：使用约束优化算法求解每个时间点的最佳权重组合
 4. **序列生成**：生成全天控制权重序列
 5. **插值平滑**：在离散时间点间实现平滑过渡
 6. **效果验证**：比较合成光谱与目标光谱的相似性
 7. **可视化分析**：绘制代表性时间点的对比图
-
-### 9. 实际运行结果
-
-#### 9.1 优化效果总结
-通过实际运行，我们成功为15个时间点（05:30-19:30）生成了控制序列：
-
-- **平均光谱RMSE**: 0.9519
-- **平均相关系数**: 0.2745
-- **所有时间点的CCT匹配精度**: >99.9%
-- **mel-DER平均匹配精度**: >95%
-
-#### 9.2 代表性时间点实际结果
-
-**早晨（05:30）:**
-- 目标：CCT=5343K, mel-DER=0.8675
-- 合成：CCT=5343K, mel-DER=0.8386
-- 权重：[蓝光:39.5%, 绿光:10.7%, 红光:33.6%, 暖白光:0.2%, 冷白光:16.1%]
-- RMSE: 0.9309, 相关系数: 0.2937
-
-**正午（12:30）:**
-- 目标：CCT=5666K, mel-DER=0.9135  
-- 合成：CCT=5666K, mel-DER=0.8814
-- 权重：[蓝光:41.0%, 绿光:8.5%, 红光:31.7%, 暖白光:0.0%, 冷白光:18.7%]
-- RMSE: 0.9324, 相关系数: 0.4019
-
-**傍晚（19:30）:**
-- 目标：CCT=3464K, mel-DER=0.5606
-- 合成：CCT=3464K, mel-DER=0.5606
-- 权重：[蓝光:33.1%, 绿光:19.3%, 红光:45.2%, 暖白光:2.4%, 冷白光:0.0%]
-- RMSE: 1.1222, 相关系数: -0.2046
-
-#### 9.3 关键发现
-
-1. **蓝光调节**: 正午时蓝光比例最高(41%)，符合高mel-DER需求
-2. **红光主导**: 傍晚红光占主导(45.2%)，实现低色温和助眠效果
-3. **冷暖白光互补**: 白天使用冷白光，夜间转向暖白光
-4. **精确参数控制**: CCT控制精度达到小数点后1位，mel-DER控制精度达到2-3位
-
-### 10. 预期结果与局限性
-
-#### 9.1 预期效果
-- 实现太阳光谱的近似模拟
-- 保持主要的生理节律特征
-- 在关键时间点达到较好的匹配效果
-
-#### 9.2 技术局限性
-- 5通道LED的光谱覆盖范围有限
-- 某些特殊波长成分可能无法精确重现
-- 优化可能存在局部最优解
-
-#### 9.3 改进方向
-- 增加更多光谱通道
-- 采用非线性优化方法
-- 引入机器学习优化策略

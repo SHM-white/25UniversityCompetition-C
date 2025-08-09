@@ -298,9 +298,10 @@ class SPDCalculator:
                 )
                 Rf = tm30_results.R_f
                 Rg = tm30_results.R_g
-                
-                # print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}")
-                
+                Duv = tm30_results.D_uv
+                CCT = tm30_results.CCT
+                # print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}, Duv={Duv:.4f}, CCT={CCT:.0f}")
+
             except Exception as tm30_error:
                 print(f"TM-30计算失败: {tm30_error}")
                 
@@ -312,6 +313,8 @@ class SPDCalculator:
                         method='CIE 2017'
                     )
                     Rf = cie2017_result.R_f
+                    Duv = cie2017_result.D_uv
+                    CCT = cie2017_result.CCT
                     # CIE 2017没有Rg，使用传统CRI估算
                     try:
                         cri = colour.colour_rendering_index(spd)
@@ -329,17 +332,18 @@ class SPDCalculator:
                         cri = colour.colour_rendering_index(spd)
                         Rf = cri  # 使用CRI作为Rf的近似
                         Rg = 100  # 默认色域指数
+                        Duv = 0.0  # 默认Duv值
                         print(f"使用传统CRI方法: Rf={Rf:.1f}, Rg={Rg:.1f}")
                     except:
                         Rf, Rg = 80, 100  # 默认值
                         print("所有方法都失败，使用默认值")
-            
-            return float(Rf), float(Rg)
-            
+
+            return float(Rf), float(Rg), float(Duv), float(CCT)
+
         except Exception as e:
             print(f"计算颜色渲染指数时出错: {e}")
-            return 80.0, 100.0  # 返回合理的默认值
-    
+            return 80.0, 100.0, 0.0, 6500.0  # 返回合理的默认值
+
     def calculate_mel_der(self, wavelengths, spd_values):
         """
         计算褪黑素日光照度比mel-DER
@@ -533,18 +537,21 @@ class SPDCalculator:
         u, v = self.xyz_to_uv(X, Y, Z)
         
         # 2. 计算CCT
-        cct = self.calculate_cct(u, v)
-        results['CCT'] = cct
-        
+        # cct = self.calculate_cct(u, v)
+        # results['CCT'] = cct
+        # print(f"相关色温 (CCT): {cct:.1f} K")
         # 3. 计算Duv
-        duv = self.calculate_duv(u, v, cct)
-        results['Duv'] = duv
-        
+        # duv = self.calculate_duv(u, v, cct)
+        # results['Duv'] = duv
+        # print(f"Duv: {duv:.4f}")
         # 4. 计算颜色渲染指数
-        rf, rg = self.calculate_color_rendering(wavelengths, spd_values)
+        rf, rg, duv, CCT = self.calculate_color_rendering(wavelengths, spd_values)
         results['Rf'] = rf
         results['Rg'] = rg
-        
+        results['Duv'] = duv
+        results['CCT'] = CCT
+        # print(f"TM-30 CCT: {CCT:.1f} K")
+        # print(f"TM-30 Duv: {duv:.4f}")
         # 5. 计算mel-DER
         mel_der = self.calculate_mel_der(wavelengths, spd_values)
         results['mel-DER'] = mel_der

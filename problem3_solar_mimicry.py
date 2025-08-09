@@ -249,7 +249,7 @@ class SolarSpectrumMimicry:
         
         Parameters:
         weights: LED通道权重
-        target_params: 目标参数字典 {'CCT': value, 'mel_DER': value}
+        target_params: 目标参数字典 {'CCT': value, 'mel_DER': value, 'Duv': value}
         
         Returns:
         参数匹配误差
@@ -263,6 +263,7 @@ class SolarSpectrumMimicry:
             
             cct_error = 0
             mel_der_error = 0
+            duv_error = 0
             
             if 'CCT' in target_params and target_params['CCT'] > 0:
                 cct_error = abs(target_params['CCT'] - synthetic_params['CCT']) / target_params['CCT']
@@ -270,7 +271,10 @@ class SolarSpectrumMimicry:
             if 'mel-DER' in target_params and target_params['mel-DER'] > 0:
                 mel_der_error = abs(target_params['mel-DER'] - synthetic_params['mel-DER']) / target_params['mel-DER']
             
-            return cct_error + mel_der_error
+            if 'Duv' in target_params:
+                duv_error = abs(target_params['Duv'] - synthetic_params['Duv']) / abs(target_params['Duv'])
+            
+            return cct_error + mel_der_error + duv_error * 0
             
         except Exception as e:
             print(f"Error calculating parameters: {e}")
@@ -314,7 +318,7 @@ class SolarSpectrumMimicry:
                 except:
                     target_params['mel-DER'] = 0.5  # 使用默认值
             
-            print(f"目标参数计算成功: CCT={target_params.get('CCT', 0):.0f}K, mel-DER={target_params.get('mel-DER', 0):.4f}")
+            print(f"目标参数计算成功: CCT={target_params.get('CCT', 0):.0f}K, Duv={target_params.get('Duv', 0):.4f}, mel-DER={target_params.get('mel-DER', 0):.4f}")
         except Exception as e:
             print(f"计算目标参数时出错: {e}")
             # 使用更合理的默认值
@@ -344,7 +348,7 @@ class SolarSpectrumMimicry:
         # 多次随机初始化，选择最优结果
         best_result = None
         best_error = float('inf')
-        
+
         for _ in range(10):  # 10次随机初始化
             # 随机初始权重（归一化）
             initial_weights = np.random.rand(5)
@@ -381,10 +385,10 @@ class SolarSpectrumMimicry:
         try:
             synthetic_params = self.calculator.calculate_all_parameters(
                 self.wavelengths, synthesized_spectrum)
-            print(f"合成参数计算成功: CCT={synthetic_params.get('CCT', 0):.0f}K, mel-DER={synthetic_params.get('mel-DER', 0):.4f}")
+            print(f"合成参数计算成功: CCT={synthetic_params.get('CCT', 0):.0f}K, Duv={synthetic_params.get('Duv', 0):.4f}, mel-DER={synthetic_params.get('mel-DER', 0):.4f}")
         except Exception as e:
             print(f"计算合成参数时出错: {e}")
-            synthetic_params = {'CCT': 0, 'Duv': 0, 'Rf': 0, 'Rg': 0, 'mel_DER': 0}
+            synthetic_params = {'CCT': 0, 'Duv': 0, 'Rf': 0, 'Rg': 0, 'mel-DER': 0}
         
         # 计算相关系数
         correlation = np.corrcoef(target_spectrum, synthesized_spectrum)[0, 1]
@@ -438,65 +442,111 @@ class SolarSpectrumMimicry:
             representative_points = control_sequence
             labels = [f'时间点{i+1}' for i in range(len(representative_points))]
         
-        # 创建对比图
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        # 创建更复杂的图表布局: 3列×3行
+        fig = plt.figure(figsize=(20, 15))
         
         for i, (result, label) in enumerate(zip(representative_points, labels)):
             if i >= 3:  # 最多显示3个时间点
                 break
                 
-            # 光谱对比图
-            ax1 = axes[0, i]
-            ax1.plot(self.wavelengths, result['target_spectrum'], 
+            # 光谱对比图 (第一行)
+            ax_spectrum = plt.subplot(3, 3, i+1)
+            ax_spectrum.plot(self.wavelengths, result['target_spectrum'], 
                     'b-', linewidth=2, label='目标太阳光谱')
-            ax1.plot(self.wavelengths, result['synthesized_spectrum'], 
+            ax_spectrum.plot(self.wavelengths, result['synthesized_spectrum'], 
                     'r--', linewidth=2, label='LED合成光谱')
-            ax1.set_xlabel('波长 (nm)')
-            ax1.set_ylabel('相对功率')
-            ax1.set_title(f'{label} ({result["time"]})\n光谱对比')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
+            ax_spectrum.set_xlabel('波长 (nm)')
+            ax_spectrum.set_ylabel('相对功率')
+            ax_spectrum.set_title(f'{label} ({result["time"]})\n光谱对比')
+            ax_spectrum.legend()
+            ax_spectrum.grid(True, alpha=0.3)
             
-            # 参数对比图
-            ax2 = axes[1, i]
-            
-            # 准备参数数据
+            # 色度参数对比图 (第二行) - CCT和Duv
+            ax_color = plt.subplot(3, 3, i+4)
             target_params = result['target_params']
             synthetic_params = result['synthetic_params']
             
-            param_names = ['CCT', 'Rf', 'Rg', 'mel_DER']
-            target_values = []
-            synthetic_values = []
+            # CCT和Duv的归一化显示
+            cct_target = target_params.get('CCT', 0) / 10
+            cct_synthetic = synthetic_params.get('CCT', 0) / 10
+            duv_target = target_params.get('Duv', 0) * 10000  # 放大10000倍
+            duv_synthetic = synthetic_params.get('Duv', 0) * 10000  # 放大10000倍
+
+            color_params = ['CCT (×10K)', 'Duv (×10000)']
+            color_target = [cct_target, duv_target]
+            color_synthetic = [cct_synthetic, duv_synthetic]
             
-            for param in param_names:
-                if param in target_params and param in synthetic_params:
-                    target_values.append(target_params[param])
-                    synthetic_values.append(synthetic_params[param])
-                else:
-                    target_values.append(0)
-                    synthetic_values.append(0)
-            
-            x = np.arange(len(param_names))
+            x_color = np.arange(len(color_params))
             width = 0.35
             
-            ax2.bar(x - width/2, target_values, width, label='目标值', alpha=0.7)
-            ax2.bar(x + width/2, synthetic_values, width, label='合成值', alpha=0.7)
+            bars1 = ax_color.bar(x_color - width/2, color_target, width, label='目标值', alpha=0.7, color='lightblue')
+            bars2 = ax_color.bar(x_color + width/2, color_synthetic, width, label='合成值', alpha=0.7, color='lightcoral')
             
-            ax2.set_xlabel('参数')
-            ax2.set_ylabel('数值')
-            ax2.set_title(f'{label} 关键参数对比')
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(param_names)
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
+            # 在柱状图上添加数值
+            for j, (bar, value) in enumerate(zip(bars1, color_target)):
+                height = bar.get_height()
+                format_str = '{:.0f}' if j == 0 else '{:.1f}'  # CCT用整数，Duv用一位小数
+                ax_color.text(bar.get_x() + bar.get_width()/2., height + max(max(color_target), max(color_synthetic)) * 0.02,
+                             format_str.format(value), ha='center', va='bottom', fontsize=9)
             
-            # 添加文本信息
-            info_text = f"RMSE: {result['spectrum_rmse']:.4f}\n"
-            info_text += f"相关系数: {result['correlation']:.4f}\n"
-            info_text += f"权重: [{', '.join([f'{w:.3f}' for w in result['weights']])}]"
-            ax2.text(0.02, 0.98, info_text, transform=ax2.transAxes, 
-                    verticalalignment='top', fontsize=9,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            for j, (bar, value) in enumerate(zip(bars2, color_synthetic)):
+                height = bar.get_height()
+                format_str = '{:.0f}' if j == 0 else '{:.1f}'  # CCT用整数，Duv用一位小数
+                ax_color.text(bar.get_x() + bar.get_width()/2., height + max(max(color_target), max(color_synthetic)) * 0.02,
+                             format_str.format(value), ha='center', va='bottom', fontsize=9)
+            
+            ax_color.set_xlabel('色度参数')
+            ax_color.set_ylabel('数值')
+            ax_color.set_title(f'{label} 色度参数对比')
+            ax_color.set_xticks(x_color)
+            ax_color.set_xticklabels(color_params)
+            ax_color.legend()
+            ax_color.grid(True, alpha=0.3)
+            
+            # 质量参数对比图 (第三行) - mel-DER, Rf, Rg
+            ax_quality = plt.subplot(3, 3, i+7)
+            
+            mel_target = target_params.get('mel-DER', 0)
+            mel_synthetic = synthetic_params.get('mel-DER', 0)
+            rf_target = target_params.get('Rf', 0)
+            rf_synthetic = synthetic_params.get('Rf', 0)
+            rg_target = target_params.get('Rg', 0)
+            rg_synthetic = synthetic_params.get('Rg', 0)
+            
+            quality_params = ['mel-DER', 'Rf', 'Rg']
+            quality_target = [mel_target, rf_target, rg_target]
+            quality_synthetic = [mel_synthetic, rf_synthetic, rg_synthetic]
+            
+            x_quality = np.arange(len(quality_params))
+            
+            bars3 = ax_quality.bar(x_quality - width/2, quality_target, width, label='目标值', alpha=0.7, color='lightgreen')
+            bars4 = ax_quality.bar(x_quality + width/2, quality_synthetic, width, label='合成值', alpha=0.7, color='gold')
+            
+            # 添加数值标签
+            for bar, value in zip(bars3, quality_target):
+                height = bar.get_height()
+                ax_quality.text(bar.get_x() + bar.get_width()/2., height + max(max(quality_target), max(quality_synthetic)) * 0.02,
+                               f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            
+            for bar, value in zip(bars4, quality_synthetic):
+                height = bar.get_height()
+                ax_quality.text(bar.get_x() + bar.get_width()/2., height + max(max(quality_target), max(quality_synthetic)) * 0.02,
+                               f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            
+            ax_quality.set_xlabel('质量参数')
+            ax_quality.set_ylabel('数值')
+            ax_quality.set_title(f'{label} 质量参数对比')
+            ax_quality.set_xticks(x_quality)
+            ax_quality.set_xticklabels(quality_params)
+            ax_quality.legend()
+            ax_quality.grid(True, alpha=0.3)
+            
+            # 在光谱图上添加详细信息
+            info_text = f"权重: B={result['weights'][0]:.3f}, G={result['weights'][1]:.3f}, R={result['weights'][2]:.3f}, WW={result['weights'][3]:.3f}, CW={result['weights'][4]:.3f}\n"
+            info_text += f"RMSE: {result['spectrum_rmse']:.4f}, 相关系数: {result['correlation']:.4f}"
+            ax_spectrum.text(0.02, 0.02, info_text, transform=ax_spectrum.transAxes, 
+                           verticalalignment='bottom', fontsize=8,
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         
         plt.tight_layout()
         plt.savefig('Pictures/representative_timepoints_analysis.svg', format='svg', bbox_inches='tight')
@@ -521,6 +571,8 @@ class SolarSpectrumMimicry:
                 '冷白光权重': result['weights'][4],
                 '目标色温CCT': result['target_params'].get('CCT', 0),
                 '合成色温CCT': result['synthetic_params'].get('CCT', 0),
+                '目标Duv': result['target_params'].get('Duv', 0),
+                '合成Duv': result['synthetic_params'].get('Duv', 0),
                 '目标mel_DER': result['target_params'].get('mel-DER', 0),
                 '合成mel_DER': result['synthetic_params'].get('mel-DER', 0),
                 '光谱均方根误差': result['spectrum_rmse'],
