@@ -168,109 +168,273 @@ sleep_data = {
 }
 ```
 
-### 4.2 统计检验方法选择
+### 4.2 统计假设检验前的前提条件验证
 
-#### 4.2.1 重复测量方差分析（Repeated Measures ANOVA）
+#### 4.2.1 正态性检验（Normality Tests）
+使用Shapiro-Wilk检验验证各组数据的正态性：
+
+$$H_0: \text{数据来自正态分布} \quad \text{vs} \quad H_1: \text{数据不来自正态分布}$$
+
+```python
+def normality_tests(self) -> Dict:
+    """正态性检验"""
+    normality_results = {}
+    
+    for metric in self.metrics:
+        normality_results[metric] = {}
+        for condition in ['A', 'B', 'C']:
+            data = self.data[self.data['condition'] == condition][metric]
+            stat, p_value = stats.shapiro(data)
+            normality_results[metric][condition] = p_value
+    
+    return normality_results
+```
+
+#### 4.2.2 方差齐性检验（Homogeneity of Variance Tests）
+检验各组间方差是否相等，这是进行ANOVA的重要前提：
+
+$$H_0: \sigma_A^2 = \sigma_B^2 = \sigma_C^2 \quad \text{vs} \quad H_1: \text{方差不全相等}$$
+
+**Levene检验**（推荐使用，对非正态分布较稳健）：
+```python
+def variance_homogeneity_tests(self) -> Dict:
+    """方差齐性检验"""
+    variance_results = {}
+    
+    for metric in self.metrics:
+        # 准备各组数据
+        groups = [self.data[self.data['condition'] == cond][metric] 
+                 for cond in ['A', 'B', 'C']]
+        
+        # Levene检验（基于中位数）
+        levene_stat, levene_p = stats.levene(*groups, center='median')
+        
+        # Bartlett检验（假设正态分布）
+        bartlett_stat, bartlett_p = stats.bartlett(*groups)
+        
+        variance_results[metric] = {
+            'levene': {
+                'statistic': levene_stat,
+                'p_value': levene_p,
+                'homogeneous': levene_p > 0.05
+            },
+            'bartlett': {
+                'statistic': bartlett_stat,
+                'p_value': bartlett_p,
+                'homogeneous': bartlett_p > 0.05
+            }
+        }
+    
+    return variance_results
+```
+
+### 4.3 统计检验方法选择决策树
+
+基于前提条件检验结果，选择合适的统计方法：
+
+```
+数据正态性 + 方差齐性
+├── 满足 → 重复测量方差分析（Repeated Measures ANOVA）
+├── 正态但方差不齐 → Welch ANOVA 或 非参数检验
+└── 不满足正态性 → Friedman非参数检验
+```
+
+#### 4.3.1 重复测量方差分析（Repeated Measures ANOVA）
 适用于交叉实验设计，检验三种光照条件的主效应：
 
 $$H_0: \mu_A = \mu_B = \mu_C \quad \text{vs} \quad H_1: \text{至少一对均值不等}$$
 
-**适用条件**：
-- 正态性：Shapiro-Wilk检验
-- 球形性：Mauchly检验
-- 如违反球形性，使用Greenhouse-Geisser校正
+**前提条件**：
+- ✓ 正态性：各组数据符合正态分布
+- ✓ 方差齐性：各组方差相等
+- ✓ 球形性：协方差矩阵满足球形性假设
 
 ```python
-# 统计检验实现框架
-from scipy import stats
-import pingouin as pg
-
-def repeated_measures_anova(data, dependent_var):
+def repeated_measures_anova(self, metric: str) -> Dict:
     """重复测量方差分析"""
     result = pg.rm_anova(
-        data=data,
-        dv=dependent_var,
+        data=self.data,
+        dv=metric,
         within='condition',
-        subject='subject_id'
+        subject='subject_id',
+        detailed=True
     )
     return result
 ```
 
-#### 4.2.2 Friedman检验（非参数替代）
-当数据不满足正态性假设时：
+#### 4.3.2 Friedman检验（非参数替代）
+当数据不满足正态性或方差齐性假设时：
 
 $$H_0: \text{三种条件的中位数相等} \quad \text{vs} \quad H_1: \text{中位数不全相等}$$
 
 ```python
-def friedman_test(condition_a, condition_b, condition_c):
+def friedman_test(self, metric: str) -> Tuple[float, float]:
     """Friedman非参数检验"""
+    condition_a = self.data[self.data['condition'] == 'A'][metric].values
+    condition_b = self.data[self.data['condition'] == 'B'][metric].values
+    condition_c = self.data[self.data['condition'] == 'C'][metric].values
+    
     statistic, p_value = stats.friedmanchisquare(
         condition_a, condition_b, condition_c
     )
     return statistic, p_value
 ```
 
-#### 4.2.3 事后比较（Post-hoc Analysis）
+#### 4.3.3 事后比较（Post-hoc Analysis）
 显著性检验后的两两比较：
 
 ```python
-def post_hoc_analysis(data, dependent_var):
+def post_hoc_analysis(self, metric: str) -> pd.DataFrame:
     """事后比较分析"""
-    # Bonferroni校正的配对t检验
-    result = pg.pairwise_tests(
-        data=data,
-        dv=dependent_var,
+    post_hoc = pg.pairwise_tests(
+        data=self.data,
+        dv=metric,
         within='condition',
         subject='subject_id',
         padjust='bonf'  # Bonferroni校正
     )
-    return result
+    return post_hoc
 ```
 
-### 4.3 效应量计算
+### 4.4 效应量计算
 $$\eta^2 = \frac{SS_{condition}}{SS_{total}}$$
 
 $$\text{Cohen's d} = \frac{\bar{x}_1 - \bar{x}_2}{\sqrt{\frac{(n_1-1)s_1^2 + (n_2-1)s_2^2}{n_1+n_2-2}}}$$
 
-## 5. 预期分析流程
+**效应量解释标准**：
+- Cohen's d < 0.2：很小效应
+- 0.2 ≤ Cohen's d < 0.5：小效应  
+- 0.5 ≤ Cohen's d < 0.8：中等效应
+- Cohen's d ≥ 0.8：大效应
+
+```python
+def effect_size_calculation(self, metric: str) -> Dict[str, float]:
+    """计算效应量"""
+    effect_sizes = {}
+    conditions = ['A', 'B', 'C']
+    
+    for i in range(len(conditions)):
+        for j in range(i+1, len(conditions)):
+            cond1, cond2 = conditions[i], conditions[j]
+            data1 = self.data[self.data['condition'] == cond1][metric]
+            data2 = self.data[self.data['condition'] == cond2][metric]
+            
+            # Cohen's d
+            pooled_std = np.sqrt(((len(data1) - 1) * data1.var() + 
+                                (len(data2) - 1) * data2.var()) / 
+                               (len(data1) + len(data2) - 2))
+            
+            if pooled_std > 0:
+                cohens_d = (data1.mean() - data2.mean()) / pooled_std
+                effect_sizes[f'{cond1}_vs_{cond2}'] = cohens_d
+    
+    return effect_sizes
+```
+
+## 5. 综合分析流程实现
 
 ### 5.1 数据预处理
 1. **读取睡眠数据**：从附录4.xlsx提取11×3=33条记录
 2. **数据清洗**：处理缺失值和异常值
 3. **指标计算**：计算6个睡眠质量指标
-4. **正态性检验**：为统计方法选择提供依据
+4. **数据验证**：确保数据完整性和一致性
 
-### 5.2 描述性统计
+### 5.2 前提条件检验
 ```python
-def descriptive_statistics(data):
-    """描述性统计分析"""
-    summary = data.groupby('condition').agg({
-        'tst': ['mean', 'std', 'median'],
-        'se': ['mean', 'std', 'median'],
-        'sol': ['mean', 'std', 'median'],
-        'n3_percent': ['mean', 'std', 'median'],
-        'rem_percent': ['mean', 'std', 'median'],
-        'awakenings': ['mean', 'std', 'median']
-    })
+def comprehensive_analysis(self) -> Dict:
+    """综合统计分析"""
+    # 1. 描述性统计
+    descriptive = self.descriptive_statistics()
+    
+    # 2. 正态性检验
+    normality = self.normality_tests()
+    
+    # 3. 方差齐性检验
+    variance_homogeneity = self.variance_homogeneity_tests()
+    
+    analysis_results = {
+        'descriptive': descriptive,
+        'normality': normality,
+        'variance_homogeneity': variance_homogeneity,
+        'anova_results': {},
+        'friedman_results': {},
+        'post_hoc_results': {},
+        'effect_sizes': {}
+    }
+```
+
+### 5.3 统计方法决策流程
+```python
+# 对每个指标进行分析
+for metric in self.metrics:
+    # 判断是否使用参数或非参数检验
+    metric_normality = normality[metric]
+    metric_variance = variance_homogeneity[metric]
+    all_normal = all(p > 0.05 for p in metric_normality.values())
+    variance_homogeneous = metric_variance['levene']['homogeneous']
+    
+    if all_normal and variance_homogeneous:
+        print("✓ 满足ANOVA所有假设，使用重复测量方差分析...")
+        anova_result = self.repeated_measures_anova(metric)
+        
+        # 如果显著，进行事后比较
+        if anova_result['p-unc'].iloc[0] < 0.05:
+            post_hoc = self.post_hoc_analysis(metric)
+            
+    elif all_normal and not variance_homogeneous:
+        print("⚠ 数据正态但方差不齐，使用Friedman非参数检验...")
+        friedman_stat, friedman_p = self.friedman_test(metric)
+        
+    else:
+        print("⚠ 数据不满足正态性假设，使用Friedman非参数检验...")
+        friedman_stat, friedman_p = self.friedman_test(metric)
+```
+
+### 5.4 描述性统计
+```python
+def descriptive_statistics(self) -> pd.DataFrame:
+    """计算描述性统计"""
+    summary = self.data.groupby('condition')[self.metrics].agg([
+        'mean', 'std', 'median', 'min', 'max'
+    ]).round(2)
+    
+    # 中文标签映射
+    condition_labels = {
+        'A': '优化光照（夜间助眠模式）',
+        'B': '普通LED光照', 
+        'C': '黑暗环境'
+    }
+    
     return summary
 ```
 
-### 5.3 假设检验
+### 5.5 假设检验框架
 **原假设**：三种光照条件对睡眠质量指标无显著影响
 **备择假设**：至少一种光照条件对睡眠质量有显著影响
 
-### 5.4 结果解释框架
+**显著性水平**：α = 0.05
+**多重比较校正**：Bonferroni校正
+
+### 5.6 结果解释框架
 基于统计检验结果，预期能够回答：
 
-1. **优化光照vs普通光照**：
-   - 环境A是否显著优于环境B？
-   - 在哪些指标上有显著改善？
+1. **前提条件验证**：
+   - 各指标是否满足正态性假设？
+   - 方差齐性检验结果如何？
+   - 应选择参数还是非参数检验？
 
-2. **优化光照vs黑暗环境**：
-   - 环境A是否显著优于环境C？
-   - 光照的积极作用是否得到验证？
+2. **主效应检验**：
+   - 三种光照条件是否存在显著差异？
+   - F统计量或χ²统计量及其p值
+   - 效应量大小及其临床意义
 
-3. **临床意义评估**：
+3. **两两比较**（如主效应显著）：
+   - 优化光照vs普通光照：环境A是否显著优于环境B？
+   - 优化光照vs黑暗环境：环境A是否显著优于环境C？
+   - 普通光照vs黑暗环境：环境B与环境C的差异？
+
+4. **效应量评估**：
+   - Cohen's d值的大小和解释
    - 统计显著性是否具有临床意义？
    - 效应量是否达到实际应用价值？
 
@@ -302,108 +466,3 @@ def descriptive_statistics(data):
 > "统计分析未发现三种光照条件对睡眠质量指标的显著影响，可能需要增加样本量或调整光照参数设计以获得更明确的效果。"
 
 这一分析将为光照对人体生理节律影响的理论研究提供重要的实证支撑，并为智能照明系统的实际应用提供科学依据。
-
-## 8. 实际分析结果
-
-### 8.1 数据处理结果
-- **成功处理**：11位被试×3种条件=33条有效睡眠记录
-- **数据质量**：每条记录包含700-1064个时间点，平均约900个数据点
-- **睡眠阶段分布**：符合AASM标准编码（2,3,4,5）
-
-### 8.2 关键发现
-
-#### 8.2.1 描述性统计对比（均值±标准差）
-
-| 指标 | 优化光照(A) | 普通光照(B) | 黑暗环境(C) |
-|------|------------|------------|------------|
-| 总睡眠时间(min) | 366.86±49.70 | 379.14±58.96 | 359.68±53.30 |
-| 睡眠效率(%) | 85.72±8.07 | 87.48±9.29 | 88.36±8.07 |
-| 入睡潜伏期(min) | 20.14±12.08 | 21.73±24.56 | **10.41±16.05** |
-| **深睡眠比例(%)** | **19.01±4.40** | **19.39±7.12** | **24.66±4.95** |
-| REM睡眠比例(%) | 25.28±7.07 | 26.82±7.46 | 21.20±7.35 |
-| 夜间醒来次数 | 14.73±3.47 | 14.18±4.73 | 13.82±4.81 |
-
-#### 8.2.2 统计显著性检验结果
-
-**深睡眠比例（N3%）存在显著差异**：
-- **重复测量方差分析**：F(2,20)=3.515, p=0.049 < 0.05
-- **事后比较**（Bonferroni校正）：
-  - 优化光照 vs 黑暗环境：p=0.0275 < 0.05，**显著差异**
-  - 普通光照 vs 黑暗环境：p=0.185 > 0.05，无显著差异
-  - 优化光照 vs 普通光照：p=1.000 > 0.05，无显著差异
-
-**其他指标**：
-- 总睡眠时间：F(2,20)=0.998, p=0.386（无显著差异）
-- 睡眠效率：χ²=3.455, p=0.178（非参数检验，无显著差异）
-- 入睡潜伏期：χ²=2.333, p=0.311（非参数检验，无显著差异）
-- REM睡眠比例：F(2,20)=1.925, p=0.172（无显著差异）
-- 夜间醒来次数：F(2,20)=0.354, p=0.706（无显著差异）
-
-#### 8.2.3 效应量分析（Cohen's d）
-
-**深睡眠比例的效应量**：
-- 优化光照 vs 黑暗环境：d=-1.206（**大效应**）
-- 普通光照 vs 黑暗环境：d=-0.859（**大效应**）
-- 优化光照 vs 普通光照：d=-0.064（很小效应）
-
-### 8.3 理论验证结果
-
-#### 8.3.1 问题2设计验证
-✅ **部分验证成功**：
-- "夜间助眠模式"设计在深睡眠比例方面表现出与黑暗环境的显著差异
-- 低mel-DER设计确实对睡眠结构产生了可测量的影响
-- 但改善效果主要体现在相对于黑暗环境，而非普通光照
-
-#### 8.3.2 问题3模拟效果验证
-✅ **光谱合成技术有效**：
-- 多通道LED合成的光谱确实产生了预期的生理效应
-- mel-DER指标在一定程度上能够预测睡眠质量变化
-
-#### 8.3.3 问题1计算模型验证
-✅ **参数计算模型可靠**：
-- CCT和mel-DER的理论计算与实际睡眠效果存在关联
-- 深睡眠比例的变化符合光照影响睡眠的理论预期
-
-### 8.4 临床意义评估
-
-#### 8.4.1 积极发现
-1. **深睡眠质量差异**：优化光照相比黑暗环境显著减少了深睡眠比例（19.01% vs 24.66%）
-2. **大效应量**：Cohen's d=-1.206表明这种差异具有临床意义
-3. **个体一致性**：个体轨迹图显示大多数被试表现出一致的趋势
-
-#### 8.4.2 局限性分析
-1. **相对于普通光照无显著优势**：优化光照与普通LED光照之间差异不显著
-2. **样本量限制**：11个被试的样本量相对较小，可能影响统计功效
-3. **黑暗环境效果更佳**：在深睡眠促进方面，黑暗环境表现最优
-
-### 8.5 结论
-
-基于本次统计分析，我们得出以下结论：
-
-**✅ 验证成功的方面**：
-1. **光照确实影响睡眠质量**：统计分析证实了光照条件对深睡眠比例的显著影响
-2. **理论模型部分有效**：问题1-3建立的光谱参数计算和优化框架在实际中产生了可测量的效果
-3. **深睡眠调节作用**：优化光照显著改变了深睡眠的占比
-
-**⚠️ 需要改进的方面**：
-1. **相对优势有限**：优化光照相比普通光照的优势不够明显
-2. **设计参数调整**：可能需要进一步优化mel-DER目标值和CCT范围
-3. **应用场景重新定位**：应考虑在特定人群或特定应用场景中的效果
-
-**🔬 科学价值**：
-本研究为**光照工程与睡眠医学的交叉领域**提供了重要的实证数据，验证了基于SPD参数优化的LED光源设计方法的可行性，为智能照明系统的进一步发展奠定了科学基础。
-
-### 8.6 代码实现说明
-
-完整的分析代码已实现在`problem4_sleep_analysis.py`中，包括：
-- **数据处理类**：`SleepDataProcessor`
-- **统计分析类**：`SleepStatisticalAnalyzer`  
-- **可视化类**：`SleepVisualization`
-
-核心功能：
-- 6个睡眠质量指标的精确计算
-- 重复测量方差分析和非参数检验
-- 效应量计算和临床意义评估
-- 多种可视化图表生成
-
-分析结果图表已保存至`Pictures/`目录，为论文撰写提供了完整的可视化支撑。

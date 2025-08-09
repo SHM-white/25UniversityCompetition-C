@@ -15,11 +15,27 @@ from scipy.interpolate import interp1d
 import colour
 import warnings
 import matplotlib.pyplot as plt
+import logging
+import time
+import os
+if not os.path.exists("logs"):
+    os.makedirs("logs")
+
+# 设置日志记录
+outputToLog = True
+timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+logPath = f"logs/spd_calculator_{timestamp}.log"
+if outputToLog:
+    logging.basicConfig(level=logging.INFO, filename=logPath)
+    logger = logging.getLogger(__name__)
+else:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
 
 warnings.filterwarnings('ignore')
 plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'DejaVu Sans', '微软雅黑']
 
-print(f"使用colour库版本: {colour.__version__}")
+logger.info(f"使用colour库版本: {colour.__version__}")
 
 class SPDCalculator:
     def __init__(self, cie_data_path="C/CIE_xyz_1931_2deg.csv"):
@@ -43,30 +59,30 @@ class SPDCalculator:
             self.x_bar = cie_data['x_bar'].values
             self.y_bar = cie_data['y_bar'].values
             self.z_bar = cie_data['z_bar'].values
-            
-            print(f"成功加载CIE数据，波长范围: {self.wavelengths[0]}-{self.wavelengths[-1]}nm")
-            
+
+            logger.info(f"成功加载CIE数据，波长范围: {self.wavelengths[0]}-{self.wavelengths[-1]}nm")
+
         except Exception as e:
-            print(f"加载CIE数据时出错: {e}")
+            logger.error(f"加载CIE数据时出错: {e}")
             # 使用默认数据范围
             self.wavelengths = np.arange(380, 781, 1)
-            print("使用默认波长范围: 380-780nm")
+            logger.warning("使用默认波长范围: 380-780nm")
     
     def load_color_rendering_data(self):
         """加载颜色渲染计算所需的数据"""
         try:
-            # 使用colour库的内置数据 - 适配不同版本的API
+            # 使用colour库的内置数据
             try:
                 self.CES = colour.SDS_COLOURCHECKERS['ColorChecker N Ohta']
             except:
                 try:
                     self.CES = colour.SDS_COLOURCHECKERS['ColorChecker 2005']
                 except:
-                    print("警告: 无法加载标准色样数据，将使用简化计算")
+                    logger.warning("警告: 无法加载标准色样数据，将使用简化计算")
                     self.CES = None
-            print("成功加载颜色渲染测试色样数据")
+            logger.info("成功加载颜色渲染测试色样数据")
         except Exception as e:
-            print(f"加载颜色渲染数据时出错: {e}")
+            logger.error(f"加载颜色渲染数据时出错: {e}")
             self.CES = None
     
     def interpolate_spd(self, wavelengths, spd_values, target_wavelengths=None):
@@ -186,12 +202,12 @@ class SPDCalculator:
         Returns:
         tuple: (u_T, v_T, du_T, dv_T) - u(T), v(T)及其导数
         """
-        # u(T)系数 - 修正后的数据
+        # u(T)系数
         u_num = 0.860117757 + 1.54118254e-4*T + 1.28641212e-7*T**2
         u_den = 1 + 8.42420235e-4*T + 7.08145163e-7*T**2
         u_T = u_num / u_den
         
-        # v(T)系数 - 修正后的数据
+        # v(T)系数
         v_num = 0.317398726 + 4.22806245e-5*T + 4.20481691e-8*T**2
         v_den = 1 - 2.89741816e-5*T + 1.61456053e-7*T**2
         v_T = v_num / v_den
@@ -234,7 +250,7 @@ class SPDCalculator:
             if result.success:
                 return result.x
             else:
-                # 如果优化失败，尝试更大范围
+                # 如果优化失败，尝试扩大搜索范围
                 result = minimize_scalar(distance_squared, bounds=(500, 50000), method='bounded')
                 if result.success:
                     return result.x
@@ -242,7 +258,7 @@ class SPDCalculator:
             pass
         
         # 如果优化方法失败，使用网格搜索
-        print("警告: 优化方法失败，使用网格搜索")
+        logger.warning("警告: 优化方法失败，使用网格搜索")
         temps = np.linspace(1000, 20000, 1000)
         distances = [distance_squared(T) for T in temps]
         min_idx = np.argmin(distances)
@@ -300,11 +316,11 @@ class SPDCalculator:
                 Rg = tm30_results.R_g
                 Duv = tm30_results.D_uv
                 CCT = tm30_results.CCT
-                # print(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}, Duv={Duv:.4f}, CCT={CCT:.0f}")
+                # logger.info(f"TM-30计算成功: Rf={Rf:.1f}, Rg={Rg:.1f}, Duv={Duv:.4f}, CCT={CCT:.0f}")
 
             except Exception as tm30_error:
-                print(f"TM-30计算失败: {tm30_error}")
-                
+                logger.error(f"TM-30计算失败: {tm30_error}")
+
                 # 备选方案：使用CIE 2017方法
                 try:
                     cie2017_result = colour.colour_fidelity_index(
@@ -318,30 +334,30 @@ class SPDCalculator:
                     # CIE 2017没有Rg，使用传统CRI估算
                     try:
                         cri = colour.colour_rendering_index(spd)
-                        Rg = max(80, min(120, cri + 10))  # 基于CRI估算Rg
+                        Rg = max(80, min(120, cri + 10))
                     except:
                         Rg = 100
-                    
-                    print(f"使用CIE 2017方法: Rf={Rf:.1f}, Rg={Rg:.1f}(估算)")
-                    
+
+                    logger.info(f"使用CIE 2017方法: Rf={Rf:.1f}, Rg={Rg:.1f}(估算)")
+
                 except Exception as cie_error:
-                    print(f"CIE 2017计算也失败: {cie_error}")
-                    
+                    logger.error(f"CIE 2017计算也失败: {cie_error}")
+
                     # 最后备选：使用传统CRI
                     try:
                         cri = colour.colour_rendering_index(spd)
                         Rf = cri  # 使用CRI作为Rf的近似
                         Rg = 100  # 默认色域指数
                         Duv = 0.0  # 默认Duv值
-                        print(f"使用传统CRI方法: Rf={Rf:.1f}, Rg={Rg:.1f}")
+                        logger.info(f"使用传统CRI方法: Rf={Rf:.1f}, Rg={Rg:.1f}")
                     except:
                         Rf, Rg = 80, 100  # 默认值
-                        print("所有方法都失败，使用默认值")
+                        logger.warning("所有方法都失败，使用默认值")
 
             return float(Rf), float(Rg), float(Duv), float(CCT)
 
         except Exception as e:
-            print(f"计算颜色渲染指数时出错: {e}")
+            logger.error(f"计算颜色渲染指数时出错: {e}")
             return 80.0, 100.0, 0.0, 6500.0  # 返回合理的默认值
 
     def calculate_mel_der(self, wavelengths, spd_values):
@@ -377,7 +393,7 @@ class SPDCalculator:
                 )
             except:
                 # 备选：使用标准V(λ)函数的解析近似
-                print("使用标准V(λ)函数的解析近似")
+                logger.warning("使用标准V(λ)函数的解析近似")
                 photopic_interp = self._standard_photopic_function(common_wavelengths)
             
             # 获取D65照明体光谱
@@ -390,7 +406,7 @@ class SPDCalculator:
                 )
             except:
                 # 备选：使用D65的解析近似
-                print("使用D65照明体的解析近似")
+                logger.warning("使用D65照明体的解析近似")
                 D65_interp = self._cie_d65_approximation(common_wavelengths)
             
             # 实现CIE S026/E:2018褪黑素效应函数 s_mel(λ)
@@ -420,13 +436,13 @@ class SPDCalculator:
             
             # 计算mel-DER (测试光源的mel-ELR / D65的mel-ELR)
             mel_DER = mel_ELR / mel_ELR_D65 if mel_ELR_D65 > 0 else 0
-            
-            # print(f"mel-DER计算成功: mel-ELR={mel_ELR:.3f}, mel-ELR_D65={mel_ELR_D65:.3f}, mel-DER={mel_DER:.3f}")
-            
+
+            logger.info(f"mel-DER计算成功: mel-ELR={mel_ELR:.3f}, mel-ELR_D65={mel_ELR_D65:.3f}, mel-DER={mel_DER:.3f}")
+
             return mel_DER
             
         except Exception as e:
-            print(f"计算mel-DER时出错: {e}")
+            logger.error(f"计算mel-DER时出错: {e}")
             return 1.0  # 返回默认值
     
     def _cie_s026_melanopic_function(self, wavelengths):
@@ -563,7 +579,7 @@ class SPDCalculator:
         # 添加中间结果
         results['XYZ'] = (X, Y, Z)
         results['uv'] = (u, v)
-        
+        logger.info(f"计算完成: CCT={CCT:.1f} K, Duv={duv:.4f}, Rf={rf:.1f}, Rg={rg:.1f}, mel-DER={mel_der:.3f}, RGB={rgb}")
         return results
     
     def print_results(self, results):
@@ -648,7 +664,7 @@ def load_spd_from_excel(file_path, sheet_name=None):
                 spd_values.append(float(spd_value))
                 
             except (ValueError, TypeError, IndexError) as e:
-                print(f"解析第{i+1}行数据时出错: {e}")
+                logger.error(f"解析第{i+1}行数据时出错: {e}")
                 continue
         
         if len(wavelengths) == 0:
@@ -662,7 +678,7 @@ def load_spd_from_excel(file_path, sheet_name=None):
         return wavelengths, spd_values
         
     except Exception as e:
-        print(f"读取Excel文件时出错: {e}")
+        logger.error(f"读取Excel文件时出错: {e}")
         return None, None
 
 
@@ -685,14 +701,14 @@ def load_spd_data(file_path, sheet_name=None, data_format='auto'):
         elif file_path.endswith('.csv'):
             return load_spd_from_csv(file_path)
         else:
-            print(f"不支持的文件格式: {file_path}")
+            logger.error(f"不支持的文件格式: {file_path}")
             return None, None
     elif data_format == 'excel':
         return load_spd_from_excel(file_path, sheet_name)
     elif data_format == 'csv':
         return load_spd_from_csv(file_path)
     else:
-        print(f"不支持的数据格式: {data_format}")
+        logger.error(f"不支持的数据格式: {data_format}")
         return None, None
 
 
@@ -710,13 +726,13 @@ def load_spd_from_csv(file_path):
         df = pd.read_csv(file_path, header=None)
         wavelengths = df.iloc[:, 0].values
         spd_values = df.iloc[:, 1].values
-        
-        print(f"成功读取CSV SPD数据，波长范围: {wavelengths[0]:.0f}-{wavelengths[-1]:.0f}nm，共{len(wavelengths)}个数据点")
-        
+
+        logger.info(f"成功读取CSV SPD数据，波长范围: {wavelengths[0]:.0f}-{wavelengths[-1]:.0f}nm，共{len(wavelengths)}个数据点")
+
         return wavelengths, spd_values
         
     except Exception as e:
-        print(f"读取CSV文件时出错: {e}")
+        logger.error(f"读取CSV文件时出错: {e}")
         return None, None
 
 
@@ -731,7 +747,7 @@ def example_usage():
     wavelengths, spd_values = load_spd_from_excel(file_path)
     
     if wavelengths is None or spd_values is None:
-        print("无法读取SPD数据，使用模拟数据进行演示")
+        logger.warning("无法读取SPD数据，使用模拟数据进行演示")
         # 使用模拟数据
         wavelengths = np.arange(380, 781, 1)
         spd_values = np.exp(-((wavelengths - 555)**2) / (2 * 50**2))  # 高斯分布示例

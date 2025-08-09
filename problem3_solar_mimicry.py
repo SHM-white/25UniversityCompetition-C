@@ -321,7 +321,7 @@ class SolarSpectrumMimicry:
             print(f"目标参数计算成功: CCT={target_params.get('CCT', 0):.0f}K, Duv={target_params.get('Duv', 0):.4f}, mel-DER={target_params.get('mel-DER', 0):.4f}")
         except Exception as e:
             print(f"计算目标参数时出错: {e}")
-            # 使用更合理的默认值
+            # 使用默认值
             target_params = {'CCT': 5000, 'Duv': 0.0, 'Rf': 80, 'Rg': 95, 'mel-DER': 0.5}
         
         def objective(weights):

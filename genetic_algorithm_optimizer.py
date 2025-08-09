@@ -135,7 +135,7 @@ class LEDOptimizer:
             rf = results['Rf']
             rg = results['Rg']
             
-            # 基础目标函数：极度强化对Rf=100的追求
+            # 基础目标函数：追求Rf=100
             rf_clamped = max(0, min(100, rf))
             
             # 使用多段非线性函数，对接近100的Rf给予指数级奖励
@@ -152,7 +152,7 @@ class LEDOptimizer:
                 # Rf <90，大幅惩罚
                 base_objective = 1.0 + 0.2 * (90 - rf_clamped)
             
-            # 约束违反的惩罚项 - 进一步放宽以优先追求高Rf
+            # 约束违反的惩罚项
             penalty = 0
             
             # CCT约束：6000±500K，平衡CCT和Rf的关系
@@ -160,33 +160,33 @@ class LEDOptimizer:
             cct_tolerance = 500
             if cct < (cct_target - cct_tolerance) or cct > (cct_target + cct_tolerance):
                 cct_deviation = abs(cct - cct_target) - cct_tolerance
-                penalty += 8.0 * (cct_deviation / 1000.0)  # 适中的CCT惩罚，保证基本约束
+                penalty += 8.0 * (cct_deviation / 1000.0)
             
-            # Rg约束：95-105，继续减小惩罚
+            # Rg约束：95-105
             if rg < 95:
-                penalty += 2.0 * (95 - rg) / 10.0  # 继续减少Rg惩罚
+                penalty += 2.0 * (95 - rg) / 10.0
             elif rg > 105:
                 penalty += 2.0 * (rg - 105) / 10.0
             
-            # Rf最低要求约束：>88，保持强惩罚但不过度
+            # Rf最低要求约束：>88
             if rf < 88:
-                penalty += 15.0 * (88 - rf) / 10.0  # 稍微减少以避免过度限制
+                penalty += 15.0 * (88 - rf) / 10.0
             
             # 计算最终目标函数值
             total_objective = base_objective + penalty
             
-            # 超级奖励机制：对极高Rf给予巨大奖励
-            if penalty <= 0.5:  # 约束基本满足
+            # 奖励机制：对高Rf给予奖励
+            if penalty <= 0.5:
                 if rf >= 99:
-                    # Rf≥99时给予超级奖励
-                    reward = min(0.95, 0.5 * (rf - 95))  # 更大的奖励
+                    # Rf≥99时给予奖励
+                    reward = min(0.95, 0.5 * (rf - 95))
                     total_objective = max(-1.0, base_objective - reward)
                 elif rf >= 96:
-                    # Rf≥96时给予大奖励
+                    # Rf≥96时给予奖励
                     reward = min(0.8, 0.3 * (rf - 92))
                     total_objective = max(-1.0, base_objective - reward)
                 elif rf >= 92:
-                    # Rf≥92时给予中等奖励
+                    # Rf≥92时给予奖励
                     reward = min(0.5, 0.1 * (rf - 88))
                     total_objective = max(-1.0, base_objective - reward)
                 else:
@@ -254,11 +254,11 @@ class LEDOptimizer:
             # 计算最终目标函数值
             total_objective = base_objective + penalty
             
-            # 确保最终值不小于-1.0，同时保持优化方向正确
-            # 当所有约束满足且mel-DER很低时，给予适当奖励但不超过-1.0的限制
+            # 确保最终值不小于-1.0
+            # 当约束满足且mel-DER很低时，给予奖励
             if penalty == 0 and mel_der <= 0.3:
                 # 无约束违反且mel-DER很低时，给予奖励
-                reward = min(0.9, 0.5 * (0.3 - mel_der))  # mel-DER越低奖励越大
+                reward = min(0.9, 0.5 * (0.3 - mel_der))
                 total_objective = max(-1.0, base_objective - reward)
             else:
                 total_objective = max(-1.0, total_objective)
@@ -519,13 +519,13 @@ def main():
     # 创建优化器
     optimizer = LEDOptimizer()
     
-    # 创建遗传算法实例，针对Rf优化调整参数
+    # 创建遗传算法实例
     ga = GeneticAlgorithm(
         optimizer=optimizer,
-        population_size=150,      # 增加种群大小以提高搜索能力
-        generations=500,          # 增加进化代数以充分搜索
-        mutation_rate=0.12,       # 稍微降低变异率以保持好解
-        crossover_rate=0.8        # 增加交叉率以促进基因重组
+        population_size=150,
+        generations=500,
+        mutation_rate=0.12,
+        crossover_rate=0.8
     )
     
     # 优化日间照明模式

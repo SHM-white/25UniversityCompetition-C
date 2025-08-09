@@ -364,7 +364,7 @@ class SleepStatisticalAnalyzer:
             groups = [self.data[self.data['condition'] == cond][metric] 
                      for cond in ['A', 'B', 'C']]
             
-            # Levene检验（基于中位数，更稳健）
+            # Levene检验（基于中位数）
             levene_stat, levene_p = stats.levene(*groups, center='median')
             
             # Bartlett检验（假设正态分布）
