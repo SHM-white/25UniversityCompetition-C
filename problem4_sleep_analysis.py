@@ -288,6 +288,26 @@ class SleepStatisticalAnalyzer:
             'B': '普通LED光照',
             'C': '黑暗环境'
         }
+        
+        # 中文列名映射
+        self.metric_chinese_names = {
+            'tst': '总睡眠时间',
+            'se': '睡眠效率', 
+            'sol': '入睡潜伏期',
+            'n3_percent': '深睡眠比例',
+            'rem_percent': 'REM睡眠比例',
+            'awakenings': '夜间醒来次数'
+        }
+        
+        # 中文列名映射（带单位）
+        self.metric_chinese_names_with_unit = {
+            'tst': '总睡眠时间(分钟)',
+            'se': '睡眠效率(%)', 
+            'sol': '入睡潜伏期(分钟)',
+            'n3_percent': '深睡眠比例(%)',
+            'rem_percent': 'REM睡眠比例(%)',
+            'awakenings': '夜间醒来次数(次)'
+        }
     
     def descriptive_statistics(self) -> pd.DataFrame:
         """计算描述性统计"""
@@ -328,6 +348,56 @@ class SleepStatisticalAnalyzer:
                 print(f"  {condition}组: W={statistic:.4f}, p={p_value:.4f} ({normal_status})")
         
         return normality_results
+    
+    def variance_homogeneity_tests(self) -> Dict:
+        """方差齐性检验"""
+        print("\n" + "="*50)
+        print("方差齐性检验 (Homogeneity of Variance)")
+        print("="*50)
+        
+        variance_results = {}
+        
+        for metric in self.metrics:
+            variance_results[metric] = {}
+            
+            # 准备各组数据
+            groups = [self.data[self.data['condition'] == cond][metric] 
+                     for cond in ['A', 'B', 'C']]
+            
+            # Levene检验（基于中位数，更稳健）
+            levene_stat, levene_p = stats.levene(*groups, center='median')
+            
+            # Bartlett检验（假设正态分布）
+            bartlett_stat, bartlett_p = stats.bartlett(*groups)
+            
+            variance_results[metric]['levene'] = {
+                'statistic': levene_stat,
+                'p_value': levene_p,
+                'homogeneous': levene_p > 0.05
+            }
+            
+            variance_results[metric]['bartlett'] = {
+                'statistic': bartlett_stat,
+                'p_value': bartlett_p,
+                'homogeneous': bartlett_p > 0.05
+            }
+            
+            # 计算各组方差用于展示
+            variances = [group.var() for group in groups]
+            variance_results[metric]['group_variances'] = {
+                'A': variances[0],
+                'B': variances[1], 
+                'C': variances[2]
+            }
+            
+            print(f"\n{metric}:")
+            print(f"  各组方差: A={variances[0]:.3f}, B={variances[1]:.3f}, C={variances[2]:.3f}")
+            print(f"  Levene检验: 统计量={levene_stat:.4f}, p={levene_p:.4f} " +
+                  f"({'方差齐性' if levene_p > 0.05 else '方差不齐'})")
+            print(f"  Bartlett检验: 统计量={bartlett_stat:.4f}, p={bartlett_p:.4f} " +
+                  f"({'方差齐性' if bartlett_p > 0.05 else '方差不齐'})")
+        
+        return variance_results
     
     def repeated_measures_anova(self, metric: str) -> Dict:
         """重复测量方差分析"""
@@ -413,9 +483,13 @@ class SleepStatisticalAnalyzer:
         # 正态性检验
         normality = self.normality_tests()
         
+        # 方差齐性检验
+        variance_homogeneity = self.variance_homogeneity_tests()
+        
         analysis_results = {
             'descriptive': descriptive,
             'normality': normality,
+            'variance_homogeneity': variance_homogeneity,
             'anova_results': {},
             'friedman_results': {},
             'post_hoc_results': {},
@@ -430,10 +504,15 @@ class SleepStatisticalAnalyzer:
             
             # 判断是否使用参数或非参数检验
             metric_normality = normality[metric]
+            metric_variance = variance_homogeneity[metric]
             all_normal = all(p > 0.05 for p in metric_normality.values())
+            variance_homogeneous = metric_variance['levene']['homogeneous']
             
-            if all_normal:
-                print("数据满足正态性假设，使用重复测量方差分析...")
+            print(f"正态性检验: {'满足' if all_normal else '不满足'}")
+            print(f"方差齐性检验: {'满足' if variance_homogeneous else '不满足'}")
+            
+            if all_normal and variance_homogeneous:
+                print("✓ 满足ANOVA所有假设，使用重复测量方差分析...")
                 anova_result = self.repeated_measures_anova(metric)
                 if anova_result is not None:
                     analysis_results['anova_results'][metric] = anova_result
@@ -448,8 +527,17 @@ class SleepStatisticalAnalyzer:
                             analysis_results['post_hoc_results'][metric] = post_hoc
                             print("事后比较结果:")
                             print(post_hoc)
+            elif all_normal and not variance_homogeneous:
+                print("⚠ 数据正态但方差不齐，推荐使用Welch ANOVA或非参数检验...")
+                print("这里使用Friedman非参数检验...")
+                friedman_stat, friedman_p = self.friedman_test(metric)
+                analysis_results['friedman_results'][metric] = {
+                    'statistic': friedman_stat,
+                    'p_value': friedman_p
+                }
+                print(f"Friedman检验结果: χ²={friedman_stat:.4f}, p={friedman_p:.4f}")
             else:
-                print("数据不满足正态性假设，使用Friedman非参数检验...")
+                print("⚠ 数据不满足正态性假设，使用Friedman非参数检验...")
                 friedman_stat, friedman_p = self.friedman_test(metric)
                 analysis_results['friedman_results'][metric] = {
                     'statistic': friedman_stat,
@@ -474,13 +562,29 @@ class SleepStatisticalAnalyzer:
         
         saved_files = {}
         
-        # 1. 保存原始睡眠数据
+        # 1. 保存原始睡眠数据（中文表头）
         raw_data_file = f"{output_dir}/problem4_sleep_data.csv"
-        self.data.to_csv(raw_data_file, index=False, encoding='utf-8-sig')
+        raw_data_chinese = self.data.copy()
+        
+        # 重命名列为中文
+        column_mapping = {
+            'subject_id': '被试编号',
+            'condition': '光照条件编码',
+            'condition_name': '光照条件名称',
+            'tst': self.metric_chinese_names_with_unit['tst'],
+            'se': self.metric_chinese_names_with_unit['se'],
+            'sol': self.metric_chinese_names_with_unit['sol'],
+            'n3_percent': self.metric_chinese_names_with_unit['n3_percent'],
+            'rem_percent': self.metric_chinese_names_with_unit['rem_percent'],
+            'awakenings': self.metric_chinese_names_with_unit['awakenings']
+        }
+        
+        raw_data_chinese = raw_data_chinese.rename(columns=column_mapping)
+        raw_data_chinese.to_csv(raw_data_file, index=False, encoding='utf-8-sig')
         saved_files['raw_data'] = raw_data_file
         print(f"原始睡眠数据已保存至: {raw_data_file}")
         
-        # 2. 保存描述性统计结果
+        # 2. 保存描述性统计结果（中文表头）
         descriptive_file = f"{output_dir}/problem4_descriptive_statistics.csv"
         descriptive_summary = self.data.groupby(['condition']).agg({
             'tst': ['count', 'mean', 'std', 'median', 'min', 'max'],
@@ -491,40 +595,61 @@ class SleepStatisticalAnalyzer:
             'awakenings': ['mean', 'std', 'median', 'min', 'max']
         }).round(3)
         
-        # 展平多级列名
-        descriptive_summary.columns = ['_'.join(col).strip() for col in descriptive_summary.columns.values]
+        # 重命名多级列名为中文
+        new_columns = []
+        for col in descriptive_summary.columns:
+            metric, stat = col[0], col[1]
+            metric_chinese = self.metric_chinese_names[metric]
+            stat_chinese_map = {
+                'count': '样本量',
+                'mean': '均值',
+                'std': '标准差',
+                'median': '中位数',
+                'min': '最小值',
+                'max': '最大值'
+            }
+            stat_chinese = stat_chinese_map.get(stat, stat)
+            new_columns.append(f"{metric_chinese}_{stat_chinese}")
+        
+        descriptive_summary.columns = new_columns
+        
+        # 重命名索引为中文
+        descriptive_summary.index = descriptive_summary.index.map(self.condition_labels)
         descriptive_summary.to_csv(descriptive_file, encoding='utf-8-sig')
         saved_files['descriptive'] = descriptive_file
         print(f"描述性统计结果已保存至: {descriptive_file}")
         
-        # 3. 保存统计检验结果
+        # 3. 保存统计检验结果（中文表头）
         stats_results = []
         
         # ANOVA结果
         for metric, result in analysis_results.get('anova_results', {}).items():
             if result is not None and len(result) > 0:
                 stats_results.append({
-                    'metric': metric,
-                    'test_type': 'Repeated Measures ANOVA',
-                    'statistic': result['F'].iloc[0],
-                    'p_value': result['p-unc'].iloc[0],
-                    'df1': result['DF'].iloc[0],
-                    'df2': result['DF'].iloc[1] if len(result) > 1 else None,
-                    'effect_size_eta2': result['ng2'].iloc[0],
-                    'significant': 'Yes' if result['p-unc'].iloc[0] < 0.05 else 'No'
+                    '睡眠指标': self.metric_chinese_names[metric],
+                    '检验方法': '重复测量方差分析',
+                    'F统计量': result['F'].iloc[0],
+                    'p值': result['p-unc'].iloc[0],
+                    '自由度1': result['DF'].iloc[0],
+                    '自由度2': result['DF'].iloc[1] if len(result) > 1 else None,
+                    '效应量η²': result['ng2'].iloc[0],
+                    '是否显著': '是' if result['p-unc'].iloc[0] < 0.05 else '否',
+                    '球形性校正ε': result['eps'].iloc[0] if 'eps' in result.columns else None
                 })
         
         # Friedman结果
         for metric, result in analysis_results.get('friedman_results', {}).items():
             stats_results.append({
-                'metric': metric,
-                'test_type': 'Friedman Test',
-                'statistic': result['statistic'],
-                'p_value': result['p_value'],
-                'df1': 2,  # k-1, k=3
-                'df2': None,
-                'effect_size_eta2': None,
-                'significant': 'Yes' if result['p_value'] < 0.05 else 'No'
+                '睡眠指标': self.metric_chinese_names[metric],
+                '检验方法': 'Friedman非参数检验',
+                'F统计量': None,
+                'p值': result['p_value'],
+                '自由度1': 2,  # k-1, k=3
+                '自由度2': None,
+                '效应量η²': None,
+                '是否显著': '是' if result['p_value'] < 0.05 else '否',
+                '球形性校正ε': None,
+                'χ²统计量': result['statistic']
             })
         
         if stats_results:
@@ -533,19 +658,23 @@ class SleepStatisticalAnalyzer:
             saved_files['statistical_tests'] = stats_file
             print(f"统计检验结果已保存至: {stats_file}")
         
-        # 4. 保存事后比较结果
+        # 4. 保存事后比较结果（中文表头）
         posthoc_results = []
         for metric, result in analysis_results.get('post_hoc_results', {}).items():
             if result is not None:
                 for idx, row in result.iterrows():
+                    condition_a_chinese = self.condition_labels[row['A']]
+                    condition_b_chinese = self.condition_labels[row['B']]
                     posthoc_results.append({
-                        'metric': metric,
-                        'comparison': f"{row['A']} vs {row['B']}",
-                        'test_statistic': row['T'],
-                        'p_uncorrected': row['p-unc'],
-                        'p_corrected': row['p-corr'],
-                        'effect_size_hedges': row['hedges'],
-                        'significant_corrected': 'Yes' if row['p-corr'] < 0.05 else 'No'
+                        '睡眠指标': self.metric_chinese_names[metric],
+                        '比较组合': f"{condition_a_chinese} vs {condition_b_chinese}",
+                        'T统计量': row['T'],
+                        '未校正p值': row['p-unc'],
+                        '校正后p值': row['p-corr'],
+                        'Hedges效应量': row['hedges'],
+                        '校正后是否显著': '是' if row['p-corr'] < 0.05 else '否',
+                        '条件A编码': row['A'],
+                        '条件B编码': row['B']
                     })
         
         if posthoc_results:
@@ -554,20 +683,24 @@ class SleepStatisticalAnalyzer:
             saved_files['posthoc'] = posthoc_file
             print(f"事后比较结果已保存至: {posthoc_file}")
         
-        # 5. 保存效应量结果
+        # 5. 保存效应量结果（中文表头）
         effect_size_results = []
         for metric, comparisons in analysis_results.get('effect_sizes', {}).items():
             for comparison, cohens_d in comparisons.items():
                 effect_magnitude = self._interpret_cohens_d(cohens_d)
                 condition_a, condition_b = comparison.split('_vs_')
+                condition_a_chinese = self.condition_labels[condition_a]
+                condition_b_chinese = self.condition_labels[condition_b]
                 effect_size_results.append({
-                    'metric': metric,
-                    'condition_a': condition_a,
-                    'condition_b': condition_b,
-                    'comparison': comparison,
-                    'cohens_d': round(cohens_d, 4),
-                    'effect_magnitude': effect_magnitude,
-                    'abs_cohens_d': round(abs(cohens_d), 4)
+                    '睡眠指标': self.metric_chinese_names[metric],
+                    '条件A': condition_a_chinese,
+                    '条件B': condition_b_chinese,
+                    '比较组合': f"{condition_a_chinese} vs {condition_b_chinese}",
+                    'Cohens d值': round(cohens_d, 4),
+                    '效应量大小': effect_magnitude,
+                    'Cohens d绝对值': round(abs(cohens_d), 4),
+                    '条件A编码': condition_a,
+                    '条件B编码': condition_b
                 })
         
         if effect_size_results:
@@ -576,17 +709,17 @@ class SleepStatisticalAnalyzer:
             saved_files['effect_sizes'] = effect_size_file
             print(f"效应量结果已保存至: {effect_size_file}")
         
-        # 6. 保存正态性检验结果
+        # 6. 保存正态性检验结果（中文表头）
         normality_results = []
         for metric, conditions in analysis_results.get('normality', {}).items():
             for condition, p_value in conditions.items():
                 condition_name = self.condition_labels[condition]
                 normality_results.append({
-                    'metric': metric,
-                    'condition': condition,
-                    'condition_name': condition_name,
-                    'shapiro_p_value': p_value,
-                    'normal_distribution': 'Yes' if p_value > 0.05 else 'No'
+                    '睡眠指标': self.metric_chinese_names[metric],
+                    '光照条件编码': condition,
+                    '光照条件名称': condition_name,
+                    'Shapiro-Wilk p值': p_value,
+                    '是否正态分布': '是' if p_value > 0.05 else '否'
                 })
         
         if normality_results:
@@ -595,7 +728,7 @@ class SleepStatisticalAnalyzer:
             saved_files['normality'] = normality_file
             print(f"正态性检验结果已保存至: {normality_file}")
         
-        # 7. 保存汇总结果
+        # 7. 保存汇总结果（中文表头）
         summary_results = []
         
         # 按条件汇总关键指标
@@ -604,21 +737,21 @@ class SleepStatisticalAnalyzer:
             condition_name = self.condition_labels[condition]
             
             summary_results.append({
-                'condition': condition,
-                'condition_name': condition_name,
-                'sample_size': len(condition_data),
-                'tst_mean': round(condition_data['tst'].mean(), 2),
-                'tst_std': round(condition_data['tst'].std(), 2),
-                'se_mean': round(condition_data['se'].mean(), 2),
-                'se_std': round(condition_data['se'].std(), 2),
-                'sol_mean': round(condition_data['sol'].mean(), 2),
-                'sol_std': round(condition_data['sol'].std(), 2),
-                'n3_percent_mean': round(condition_data['n3_percent'].mean(), 2),
-                'n3_percent_std': round(condition_data['n3_percent'].std(), 2),
-                'rem_percent_mean': round(condition_data['rem_percent'].mean(), 2),
-                'rem_percent_std': round(condition_data['rem_percent'].std(), 2),
-                'awakenings_mean': round(condition_data['awakenings'].mean(), 2),
-                'awakenings_std': round(condition_data['awakenings'].std(), 2)
+                '光照条件编码': condition,
+                '光照条件名称': condition_name,
+                '样本量': len(condition_data),
+                '总睡眠时间_均值(分钟)': round(condition_data['tst'].mean(), 2),
+                '总睡眠时间_标准差': round(condition_data['tst'].std(), 2),
+                '睡眠效率_均值(%)': round(condition_data['se'].mean(), 2),
+                '睡眠效率_标准差': round(condition_data['se'].std(), 2),
+                '入睡潜伏期_均值(分钟)': round(condition_data['sol'].mean(), 2),
+                '入睡潜伏期_标准差': round(condition_data['sol'].std(), 2),
+                '深睡眠比例_均值(%)': round(condition_data['n3_percent'].mean(), 2),
+                '深睡眠比例_标准差': round(condition_data['n3_percent'].std(), 2),
+                'REM睡眠比例_均值(%)': round(condition_data['rem_percent'].mean(), 2),
+                'REM睡眠比例_标准差': round(condition_data['rem_percent'].std(), 2),
+                '夜间醒来次数_均值(次)': round(condition_data['awakenings'].mean(), 2),
+                '夜间醒来次数_标准差': round(condition_data['awakenings'].std(), 2)
             })
         
         summary_file = f"{output_dir}/problem4_summary_by_condition.csv"
